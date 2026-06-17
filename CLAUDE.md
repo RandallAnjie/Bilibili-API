@@ -67,6 +67,27 @@ at `meta/bilibili/{bvid}.json`. See `/root/Douyin-API/CLAUDE.md` for the
 shared-infra details and the RandallFlare R2/D1 gotchas (stream-body
 puts, `.all()` not `.first()`, plane body-size cap for large blobs).
 
+## Aggregation platform (D1-backed, public reads)
+
+Same shape as Douyin-API (see its CLAUDE.md). Public: `/discover`,
+`/work`, `/search`, `/author`, `/api/comments`. Bilibili specifics:
+
+- Tags come from `x/tag/archive/tags` (the view's `tname` is empty now);
+  follower trend from `x/relation/stat?vmid=`; 分P from the full
+  `pages_list` (cid+part) stored in `meta-cache.js`. All best-effort,
+  fetched concurrently in `ingest.js` so the parse stays fast.
+- Comments: oid is the **view's authoritative `aid`** (from the cached
+  record) — `bv2av` does NOT round-trip the new large-aid format, so never
+  use it for comment oids.
+
+### Cron (`POST /__edge_cron`)
+
+Edge agent POSTs with `X-Edge-Cron-Expression`, no token (memory
+`project_bigrandall_cron_convention`). Throttled 50s/expr. Each run:
+refresh the 8 oldest works (new `stats_history` snapshots + follower
+points + comments) AND grow the library by ingesting up to 4 fresh videos
+from the popular feed (`x/web-interface/popular`).
+
 ## Conventions
 
 - Cookie/secret only from env; code/comments English; ASCII-safe strings
