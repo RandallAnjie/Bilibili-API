@@ -11,7 +11,6 @@
 import bilibiliWebService from './service/bilibili.js'
 import { hybridService, downloadService } from './service/hybrid.js'
 import { proxyService } from './service/proxy.js'
-import { cacheDebugService } from './service/debug.js'
 import { adminPageService, adminRecentService } from './service/admin.js'
 import appService from './service/app.js'
 import docsService from './service/docs.js'
@@ -53,9 +52,6 @@ export async function router (request, ctx) {
   }
   if (pathname === '/proxy') {
     return proxyService(request, ctx)
-  }
-  if (pathname === '/__cachedebug') {
-    return cacheDebugService(request, ctx)
   }
 
   throw new HTTPException(404, { message: `No route for ${pathname}` })
