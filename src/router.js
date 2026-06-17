@@ -13,6 +13,7 @@ import { hybridService, downloadService } from './service/hybrid.js'
 import { proxyService } from './service/proxy.js'
 import { cacheDebugService } from './service/debug.js'
 import { adminPageService, adminRecentService } from './service/admin.js'
+import { discoverPageService, discoverApiService } from './service/discover.js'
 import appService from './service/app.js'
 import docsService from './service/docs.js'
 import { HTTPException } from './utils/http-exception.js'
@@ -41,6 +42,12 @@ export async function router (request, ctx) {
   }
   if (pathname === '/api/admin/recent' && request.method === 'GET') {
     return adminRecentService(request, ctx)
+  }
+  if (pathname === '/discover' && request.method === 'GET') {
+    return discoverPageService(request, ctx)
+  }
+  if (pathname === '/api/discover' && request.method === 'GET') {
+    return discoverApiService(request, ctx)
   }
   if (pathname.startsWith('/api/bilibili/web/')) {
     return bilibiliWebService(pathname.slice('/api/bilibili/web/'.length), request, ctx)

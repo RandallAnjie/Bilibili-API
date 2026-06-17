@@ -950,25 +950,45 @@ async function ensureSchema(db) {
     original_url TEXT,
     cover TEXT,
     play TEXT,
+    duration INTEGER,
+    extra TEXT,
     hits INTEGER NOT NULL DEFAULT 1,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     UNIQUE(platform, video_id)
   )`).run();
+  for (const col of ["duration INTEGER", "extra TEXT"]) {
+    try {
+      await db.prepare(`ALTER TABLE queries ADD COLUMN ${col}`).run();
+    } catch {
+    }
+  }
   schemaReady = true;
 }
+var COLS = "platform, video_id, type, author, description, original_url, cover, play, duration, extra, hits, created_at, updated_at";
+var parseRow = (r) => {
+  if (r && typeof r.extra === "string") {
+    try {
+      r.extra = JSON.parse(r.extra);
+    } catch {
+      r.extra = null;
+    }
+  }
+  return r;
+};
 async function logQuery(ctx, row) {
   const db = ctx.config.d1;
   if (!db) return;
   try {
     await ensureSchema(db);
     const now = Date.now();
+    const extra = row.extra ? JSON.stringify(row.extra) : null;
     await db.prepare(`INSERT INTO queries
-      (platform, video_id, type, author, description, original_url, cover, play, hits, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+      (platform, video_id, type, author, description, original_url, cover, play, duration, extra, hits, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
       ON CONFLICT(platform, video_id) DO UPDATE SET
         hits = hits + 1, updated_at = ?, type = ?, author = ?,
-        description = ?, original_url = ?, cover = ?, play = ?`).bind(
+        description = ?, original_url = ?, cover = ?, play = ?, duration = ?, extra = ?`).bind(
       row.platform,
       row.video_id,
       row.type,
@@ -977,6 +997,8 @@ async function logQuery(ctx, row) {
       row.original_url,
       row.cover,
       row.play,
+      row.duration ?? null,
+      extra,
       now,
       now,
       now,
@@ -985,7 +1007,9 @@ async function logQuery(ctx, row) {
       row.description,
       row.original_url,
       row.cover,
-      row.play
+      row.play,
+      row.duration ?? null,
+      extra
     ).run();
   } catch (e) {
     try {
@@ -994,25 +1018,24 @@ async function logQuery(ctx, row) {
     }
   }
 }
-async function recentQueries(ctx, limit = 10, offset = 0) {
+async function pageQueries(ctx, order, limit, offset) {
   const db = ctx.config.d1;
   if (!db) return { rows: [], total: 0 };
   try {
     await ensureSchema(db);
-    const res = await db.prepare(
-      `SELECT platform, video_id, type, author, description, original_url, cover, play, hits, created_at, updated_at
-       FROM queries ORDER BY updated_at DESC LIMIT ? OFFSET ?`
-    ).bind(limit, offset).all();
+    const res = await db.prepare(`SELECT ${COLS} FROM queries ORDER BY ${order} LIMIT ? OFFSET ?`).bind(limit, offset).all();
     const cnt = await db.prepare("SELECT COUNT(*) AS n FROM queries").all();
-    return { rows: res?.results || [], total: cnt?.results?.[0]?.n || 0 };
+    return { rows: (res?.results || []).map(parseRow), total: cnt?.results?.[0]?.n || 0 };
   } catch (e) {
     try {
-      console.error("[d1] recentQueries failed", e?.message || e);
+      console.error("[d1] pageQueries failed", e?.message || e);
     } catch {
     }
     return { rows: [], total: 0 };
   }
 }
+var recentQueries = (ctx, limit = 10, offset = 0) => pageQueries(ctx, "updated_at DESC", limit, offset);
+var discoverQueries = (ctx, sort = "recent", limit = 12, offset = 0) => pageQueries(ctx, sort === "hot" ? "hits DESC, updated_at DESC" : "updated_at DESC", limit, offset);
 async function rateLimitHit(ctx, ip, limit, windowSec) {
   if (ctx.config.kv) return rateLimitKV(ctx.config.kv, ip, limit, windowSec);
   if (ctx.config.d1) return rateLimitD1(ctx.config.d1, ip, limit, windowSec);
@@ -1102,7 +1125,9 @@ async function hybridService(route, request, ctx) {
       description: min.desc || null,
       original_url: target,
       cover: proxyLink(request, ctx, platform, id, "cover"),
-      play: proxyLink(request, ctx, platform, id, "mp4")
+      play: proxyLink(request, ctx, platform, id, "mp4"),
+      duration: raw.duration || null,
+      extra: { stats: min.statistics || null }
     });
     let data = minimal ? min : raw;
     if (minimal && proxy) data = rewriteMinimalToProxy(data, request, ctx, linkTtl);
@@ -1423,11 +1448,131 @@ footer a{color:var(--muted)}
 </body>
 </html>`;
 
-// src/service/app.js
-async function appService(request, ctx) {
+// src/service/discover.js
+async function discoverApiService(request, ctx) {
+  const url = new URL(request.url);
+  const sort = url.searchParams.get("sort") === "hot" ? "hot" : "recent";
+  const limit = Math.min(48, Math.max(1, Number(url.searchParams.get("limit")) || 12));
+  const page = Math.max(1, Number(url.searchParams.get("page")) || 1);
+  const { rows, total } = await discoverQueries(ctx, sort, limit, (page - 1) * limit);
+  return rawJsonResponse({ code: 200, sort, page, limit, total, pages: Math.ceil(total / limit) || 1, count: rows.length, data: rows });
+}
+async function discoverPageService(request, ctx) {
   return new Response(PAGE, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
 }
 var PAGE = `<!doctype html>
+<html lang=zh>
+<head>
+<meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>\u53D1\u73B0 \xB7 \u54D4\u54E9\u54D4\u54E9\u89E3\u6790</title>
+<style>
+:root{
+  --bg:#11141a;--panel:#181d27;--panel2:#1e2430;--line:#2c3442;
+  --ink:#e9edf3;--muted:#8b97a8;--faint:#586273;--pink:#fb7299;--blue:#46c4ff;
+  --serif:"Songti SC","STSong","Noto Serif SC",ui-serif,Georgia,serif;
+  --sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",Segoe UI,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(1100px 560px at 50% -10%,#1a2230 0%,transparent 60%),var(--bg);color:var(--ink);font-family:var(--sans);padding:max(20px,4vh) 18px 60px;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1000px;margin:0 auto}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.32em;text-transform:uppercase;color:var(--pink);margin:0 0 8px}
+h1{font-family:var(--serif);font-weight:600;font-size:clamp(36px,9vw,64px);line-height:.95;margin:0;letter-spacing:.04em}
+.sub{color:var(--muted);font-size:14px;margin:12px 0 0}
+.bar{display:flex;gap:8px;align-items:center;margin:22px 0 18px;flex-wrap:wrap}
+.tab{font-family:var(--mono);font-size:12px;letter-spacing:.1em;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--muted);padding:8px 16px;border-radius:999px}
+.tab.on{border-color:var(--pink);color:var(--pink)}
+.spacer{flex:1}
+.bar a{font-family:var(--mono);font-size:11px;color:var(--faint);text-decoration:none}
+.bar a:hover{color:var(--blue)}
+.status{font-family:var(--mono);font-size:12px;color:var(--muted);margin:0 2px 16px;min-height:1.3em}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
+.card{display:block;text-decoration:none;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;transition:border-color .15s}
+.card:hover{border-color:var(--blue)}
+.thumb{position:relative;width:100%;aspect-ratio:16/9;background:#000;overflow:hidden}
+.thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.hot{position:absolute;right:8px;top:8px;font-family:var(--mono);font-size:10px;background:rgba(251,114,153,.92);color:#2a0d16;font-weight:700;padding:2px 7px;border-radius:5px}
+.dur{position:absolute;right:8px;bottom:8px;font-family:var(--mono);font-size:10px;background:rgba(17,20,26,.82);color:#cdd6e2;padding:2px 6px;border-radius:5px}
+.info{padding:10px}
+.who{font-family:var(--mono);font-size:11px;color:var(--blue);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ttl{font-size:13px;margin-top:3px;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.when{font-family:var(--mono);font-size:10px;color:var(--faint);margin-top:6px}
+.pager{display:flex;gap:10px;align-items:center;justify-content:center;margin-top:24px;font-family:var(--mono);font-size:12px;color:var(--muted)}
+.pager button{font-family:var(--mono);font-size:12px;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--ink);padding:8px 14px;border-radius:8px}
+.pager button:disabled{opacity:.35;cursor:default}
+.pager button:hover:not(:disabled){border-color:var(--blue);color:var(--blue)}
+footer{margin-top:32px;font-family:var(--mono);font-size:11px;color:var(--faint)}
+footer a{color:var(--muted)}
+</style>
+</head>
+<body>
+<main class=wrap>
+  <p class=eyebrow>BILIBILI \u53D1\u73B0</p>
+  <h1>\u5927\u5BB6\u5728\u89E3\u6790</h1>
+  <p class=sub>\u6700\u8FD1\u88AB\u89E3\u6790\u7684\u89C6\u9891\uFF0C\u76F4\u63A5\u6765\u81EA\u7F13\u5B58\u2014\u2014\u70B9\u5F00\u5373\u770B\uFF0C\u4E0D\u518D\u6253\u6270\u539F\u7AD9\u3002</p>
+  <div class=bar>
+    <button class="tab on" data-sort=recent id=tabRecent>\u6700\u8FD1</button>
+    <button class=tab data-sort=hot id=tabHot>\u70ED\u5EA6</button>
+    <span class=spacer></span>
+    <a href="/">\u2190 \u53BB\u89E3\u6790</a>
+  </div>
+  <p id=status class=status>\u52A0\u8F7D\u4E2D\u2026</p>
+  <div id=grid class=grid></div>
+  <div id=pager class=pager></div>
+  <footer>\u81EA\u6258\u7BA1\u4E8E RandallFlare \xB7 <a href="/">\u89E3\u6790\u53F0</a> \xB7 <a href="/docs">\u63A5\u53E3</a></footer>
+</main>
+<script>
+(function(){
+  var $=function(s){return document.querySelector(s)}
+  var grid=$('#grid'),statusEl=$('#status'),pager=$('#pager')
+  var sort='recent',page=1
+  function el(t,c,x){var e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e}
+  function ago(ms){var s=Math.floor((Date.now()-ms)/1000);if(s<60)return s+'\u79D2\u524D';if(s<3600)return Math.floor(s/60)+'\u5206\u524D';if(s<86400)return Math.floor(s/3600)+'\u65F6\u524D';return Math.floor(s/86400)+'\u5929\u524D'}
+  function dur(d){if(!d)return '';var m=Math.floor(d/60),s=d%60;return m+':'+(s<10?'0':'')+s}
+  function card(row){
+    var href=row.play||('/?u='+encodeURIComponent(row.original_url||''))
+    var a=el('a','card');a.href=href;if(row.play){a.target='_blank';a.rel='noopener'}
+    var th=el('div','thumb')
+    if(row.cover){var im=el('img');im.loading='lazy';im.src=row.cover;im.alt='';th.appendChild(im)}
+    th.appendChild(el('span','hot','\u{1F525}'+(row.hits||1)))
+    var d=dur(row.duration);if(d)th.appendChild(el('span','dur',d))
+    a.appendChild(th)
+    var info=el('div','info')
+    info.appendChild(el('div','who',row.author||'\u672A\u77E5\u4F5C\u8005'))
+    info.appendChild(el('div','ttl',row.description||'(\u65E0\u6807\u9898)'))
+    info.appendChild(el('div','when',ago(row.updated_at)))
+    a.appendChild(info)
+    return a
+  }
+  async function load(){
+    statusEl.textContent='\u52A0\u8F7D\u4E2D\u2026';grid.innerHTML='';pager.innerHTML=''
+    try{
+      var r=await fetch('/api/discover?sort='+sort+'&page='+page+'&limit=12')
+      var j=await r.json();var rows=j.data||[]
+      statusEl.textContent=j.total?('\u5171 '+j.total+' \u6761 \xB7 \u7B2C '+j.page+'/'+j.pages+' \u9875'):'\u8FD8\u6CA1\u6709\u89E3\u6790\u8BB0\u5F55\uFF0C\u53BB\u89E3\u6790\u53F0\u8BD5\u8BD5'
+      rows.forEach(function(row){grid.appendChild(card(row))})
+      if(j.pages>1){
+        var prev=el('button',null,'\u2190 \u4E0A\u4E00\u9875');prev.disabled=j.page<=1;prev.addEventListener('click',function(){page--;load()})
+        var next=el('button',null,'\u4E0B\u4E00\u9875 \u2192');next.disabled=j.page>=j.pages;next.addEventListener('click',function(){page++;load()})
+        pager.appendChild(prev);pager.appendChild(el('span',null,j.page+' / '+j.pages));pager.appendChild(next)
+      }
+    }catch(e){statusEl.textContent='\u52A0\u8F7D\u5931\u8D25\uFF1A'+e.message}
+  }
+  function setSort(s){if(sort===s)return;sort=s;page=1;$('#tabRecent').classList.toggle('on',s==='recent');$('#tabHot').classList.toggle('on',s==='hot');load()}
+  $('#tabRecent').addEventListener('click',function(){setSort('recent')})
+  $('#tabHot').addEventListener('click',function(){setSort('hot')})
+  load()
+})();
+</script>
+</body>
+</html>`;
+
+// src/service/app.js
+async function appService(request, ctx) {
+  return new Response(PAGE2, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+}
+var PAGE2 = `<!doctype html>
 <html lang=zh>
 <head>
 <meta charset=utf-8>
@@ -1501,7 +1646,7 @@ footer a{color:var(--muted)}
   </div>
   <p id=status class=status>\u7B49\u5F85\u94FE\u63A5</p>
   <div id=out></div>
-  <footer>\u81EA\u6258\u7BA1\u4E8E RandallFlare \xB7 <a href="/admin">\u6863\u6848</a> \xB7 <a href="/docs">\u63A5\u53E3\u6587\u6863</a></footer>
+  <footer>\u81EA\u6258\u7BA1\u4E8E RandallFlare \xB7 <a href="/discover">\u53D1\u73B0</a> \xB7 <a href="/admin">\u6863\u6848</a> \xB7 <a href="/docs">\u63A5\u53E3\u6587\u6863</a></footer>
 </main>
 <script>
 (function(){
@@ -1647,6 +1792,12 @@ async function router(request, ctx) {
   }
   if (pathname === "/api/admin/recent" && request.method === "GET") {
     return adminRecentService(request, ctx);
+  }
+  if (pathname === "/discover" && request.method === "GET") {
+    return discoverPageService(request, ctx);
+  }
+  if (pathname === "/api/discover" && request.method === "GET") {
+    return discoverApiService(request, ctx);
   }
   if (pathname.startsWith("/api/bilibili/web/")) {
     return bilibiliWebService(pathname.slice("/api/bilibili/web/".length), request, ctx);

@@ -16,12 +16,25 @@ async function ensureSchema (db) {
     original_url TEXT,
     cover TEXT,
     play TEXT,
+    duration INTEGER,
+    extra TEXT,
     hits INTEGER NOT NULL DEFAULT 1,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     UNIQUE(platform, video_id)
   )`).run()
+  // Add columns to pre-existing tables (SQLite has no ADD COLUMN IF NOT
+  // EXISTS — ignore the "duplicate column" error).
+  for (const col of ['duration INTEGER', 'extra TEXT']) {
+    try { await db.prepare(`ALTER TABLE queries ADD COLUMN ${col}`).run() } catch {}
+  }
   schemaReady = true
+}
+
+const COLS = 'platform, video_id, type, author, description, original_url, cover, play, duration, extra, hits, created_at, updated_at'
+const parseRow = (r) => {
+  if (r && typeof r.extra === 'string') { try { r.extra = JSON.parse(r.extra) } catch { r.extra = null } }
+  return r
 }
 
 // Upsert a query row. Re-parsing the same id bumps hits + updated_at so
@@ -33,16 +46,17 @@ export async function logQuery (ctx, row) {
   try {
     await ensureSchema(db)
     const now = Date.now()
+    const extra = row.extra ? JSON.stringify(row.extra) : null
     await db.prepare(`INSERT INTO queries
-      (platform, video_id, type, author, description, original_url, cover, play, hits, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+      (platform, video_id, type, author, description, original_url, cover, play, duration, extra, hits, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
       ON CONFLICT(platform, video_id) DO UPDATE SET
         hits = hits + 1, updated_at = ?, type = ?, author = ?,
-        description = ?, original_url = ?, cover = ?, play = ?`)
+        description = ?, original_url = ?, cover = ?, play = ?, duration = ?, extra = ?`)
       .bind(
         row.platform, row.video_id, row.type, row.author, row.description,
-        row.original_url, row.cover, row.play, now, now,
-        now, row.type, row.author, row.description, row.original_url, row.cover, row.play
+        row.original_url, row.cover, row.play, row.duration ?? null, extra, now, now,
+        now, row.type, row.author, row.description, row.original_url, row.cover, row.play, row.duration ?? null, extra
       )
       .run()
   } catch (e) {
@@ -50,26 +64,30 @@ export async function logQuery (ctx, row) {
   }
 }
 
-// A page of queries (by last seen) + total count, for /admin paging.
-// Returns { rows: [], total: 0 } when no D1 / on error.
-export async function recentQueries (ctx, limit = 10, offset = 0) {
+// A page of queries + total count. `order` is a safe SQL ORDER BY
+// clause. Returns { rows, total }; {rows:[],total:0} without D1.
+async function pageQueries (ctx, order, limit, offset) {
   const db = ctx.config.d1
   if (!db) return { rows: [], total: 0 }
   try {
     await ensureSchema(db)
-    const res = await db.prepare(
-      `SELECT platform, video_id, type, author, description, original_url, cover, play, hits, created_at, updated_at
-       FROM queries ORDER BY updated_at DESC LIMIT ? OFFSET ?`
-    ).bind(limit, offset).all()
-    // Use .all() not .first() — the RandallFlare D1 shim's .first()
-    // returns null here, while .all() works.
+    const res = await db.prepare(`SELECT ${COLS} FROM queries ORDER BY ${order} LIMIT ? OFFSET ?`).bind(limit, offset).all()
+    // .all() not .first() — the RandallFlare D1 shim's .first() returns null.
     const cnt = await db.prepare('SELECT COUNT(*) AS n FROM queries').all()
-    return { rows: res?.results || [], total: cnt?.results?.[0]?.n || 0 }
+    return { rows: (res?.results || []).map(parseRow), total: cnt?.results?.[0]?.n || 0 }
   } catch (e) {
-    try { console.error('[d1] recentQueries failed', e?.message || e) } catch {}
+    try { console.error('[d1] pageQueries failed', e?.message || e) } catch {}
     return { rows: [], total: 0 }
   }
 }
+
+// Admin: most-recently-seen first.
+export const recentQueries = (ctx, limit = 10, offset = 0) =>
+  pageQueries(ctx, 'updated_at DESC', limit, offset)
+
+// Public discover: sort by hits (热度) or recency.
+export const discoverQueries = (ctx, sort = 'recent', limit = 12, offset = 0) =>
+  pageQueries(ctx, sort === 'hot' ? 'hits DESC, updated_at DESC' : 'updated_at DESC', limit, offset)
 
 // Per-IP fixed-window rate limit. Prefers KV (TTL-expiring counters),
 // falls back to D1. Returns { allowed, count, limit, resetSec }. With
