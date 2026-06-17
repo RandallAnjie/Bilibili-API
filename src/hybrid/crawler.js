@@ -69,6 +69,8 @@ export function mediaCandidates (platform, raw, kind) {
     for (const s of (raw.dash?.audio || [])) pushStream(s)
   } else if (kind === 'cover') {
     push(raw.pic)
+  } else if (kind === 'avatar') {
+    push(raw.owner?.face)
   }
   return [...new Set(out.map(u => u.replace(/^http:/, 'https:')))]
 }

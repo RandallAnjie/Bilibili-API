@@ -42,11 +42,26 @@ export async function hybridService (route, request, ctx) {
     const { raw } = await fetchRawById(ctx, platform, id, refresh)
     const min = toMinimal(platform, id, raw)
 
+    const o = min.author || {}
+    const s = min.statistics || {}
     await logQuery(ctx, {
       platform,
       video_id: id,
       type: 'video',
-      author: (min.author && (min.author.name || min.author.nickname)) || null,
+      author: o.name || null,
+      authorInfo: o.mid
+        ? {
+            id: String(o.mid),
+            name: o.name || null,
+            avatar: proxyLink(request, ctx, platform, id, 'avatar'),
+            extra: { mid: o.mid }
+          }
+        : null,
+      create_time: raw.pubdate || null,
+      stats: {
+        play: s.view, digg: s.like, comment: s.reply, share: s.share,
+        danmaku: s.danmaku, coin: s.coin, collect: s.favorite
+      },
       description: min.desc || null,
       original_url: target,
       cover: proxyLink(request, ctx, platform, id, 'cover'),

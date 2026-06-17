@@ -13,10 +13,10 @@ import { serveFromR2, teeIntoCache, r2PutRetry, mediaKey } from '../utils/r2cach
 
 const BUFFER_CAP = 20 * 1024 * 1024
 const MIN_CACHE_BYTES = 1024
-const minSizeForKind = (kind) => (kind === 'cover' ? 256 : 10000)
+const minSizeForKind = (kind) => (kind === 'cover' || kind === 'avatar' ? 256 : 10000)
 
-const KIND_CT = { mp4: 'video/mp4', video: 'video/mp4', audio: 'audio/mp4', cover: 'image/jpeg' }
-const KIND_EXT = { mp4: 'mp4', video: 'm4s', audio: 'm4s', cover: 'jpeg' }
+const KIND_CT = { mp4: 'video/mp4', video: 'video/mp4', audio: 'audio/mp4', cover: 'image/jpeg', avatar: 'image/jpeg' }
+const KIND_EXT = { mp4: 'mp4', video: 'm4s', audio: 'm4s', cover: 'jpeg', avatar: 'jpeg' }
 
 export async function proxyService (request, ctx) {
   const url = new URL(request.url)

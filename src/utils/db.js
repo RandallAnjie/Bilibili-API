@@ -25,13 +25,32 @@ async function ensureSchema (db) {
   )`).run()
   // Add columns to pre-existing tables (SQLite has no ADD COLUMN IF NOT
   // EXISTS — ignore the "duplicate column" error).
-  for (const col of ['duration INTEGER', 'extra TEXT']) {
+  for (const col of ['duration INTEGER', 'extra TEXT', 'create_time INTEGER', 'author_id TEXT']) {
     try { await db.prepare(`ALTER TABLE queries ADD COLUMN ${col}`).run() } catch {}
   }
+  // Authors — deduped per (platform, author_id), refreshed each parse.
+  await db.prepare(`CREATE TABLE IF NOT EXISTS authors (
+    platform TEXT NOT NULL,
+    author_id TEXT NOT NULL,
+    name TEXT,
+    avatar TEXT,
+    extra TEXT,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY(platform, author_id)
+  )`).run()
+  // Per-parse stats snapshots — the time series behind the analysis chart.
+  await db.prepare(`CREATE TABLE IF NOT EXISTS stats_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform TEXT NOT NULL,
+    video_id TEXT NOT NULL,
+    ts INTEGER NOT NULL,
+    stats TEXT
+  )`).run()
+  try { await db.prepare('CREATE INDEX IF NOT EXISTS idx_stats_vid ON stats_history (platform, video_id, ts)').run() } catch {}
   schemaReady = true
 }
 
-const COLS = 'platform, video_id, type, author, description, original_url, cover, play, duration, extra, hits, created_at, updated_at'
+const COLS = 'platform, video_id, type, author, author_id, description, original_url, cover, play, duration, create_time, extra, hits, created_at, updated_at'
 const parseRow = (r) => {
   if (r && typeof r.extra === 'string') { try { r.extra = JSON.parse(r.extra) } catch { r.extra = null } }
   return r
@@ -47,20 +66,70 @@ export async function logQuery (ctx, row) {
     await ensureSchema(db)
     const now = Date.now()
     const extra = row.extra ? JSON.stringify(row.extra) : null
+    const authorId = row.authorInfo?.id || null
     await db.prepare(`INSERT INTO queries
-      (platform, video_id, type, author, description, original_url, cover, play, duration, extra, hits, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+      (platform, video_id, type, author, author_id, description, original_url, cover, play, duration, create_time, extra, hits, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
       ON CONFLICT(platform, video_id) DO UPDATE SET
-        hits = hits + 1, updated_at = ?, type = ?, author = ?,
-        description = ?, original_url = ?, cover = ?, play = ?, duration = ?, extra = ?`)
+        hits = hits + 1, updated_at = ?, type = ?, author = ?, author_id = ?,
+        description = ?, original_url = ?, cover = ?, play = ?, duration = ?, create_time = ?, extra = ?`)
       .bind(
-        row.platform, row.video_id, row.type, row.author, row.description,
-        row.original_url, row.cover, row.play, row.duration ?? null, extra, now, now,
-        now, row.type, row.author, row.description, row.original_url, row.cover, row.play, row.duration ?? null, extra
+        row.platform, row.video_id, row.type, row.author, authorId, row.description,
+        row.original_url, row.cover, row.play, row.duration ?? null, row.create_time ?? null, extra, now, now,
+        now, row.type, row.author, authorId, row.description, row.original_url, row.cover, row.play, row.duration ?? null, row.create_time ?? null, extra
       )
       .run()
+
+    // Upsert author profile.
+    if (authorId) {
+      const a = row.authorInfo
+      const aExtra = a.extra ? JSON.stringify(a.extra) : null
+      await db.prepare(`INSERT INTO authors (platform, author_id, name, avatar, extra, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(platform, author_id) DO UPDATE SET name = ?, avatar = ?, extra = ?, updated_at = ?`)
+        .bind(row.platform, authorId, a.name ?? null, a.avatar ?? null, aExtra, now, a.name ?? null, a.avatar ?? null, aExtra, now)
+        .run()
+    }
+
+    // Append a stats snapshot — but dedupe: skip if the latest snapshot
+    // for this video is <5 min old AND identical, so rapid re-parses
+    // don't spam the series.
+    if (row.stats && Object.keys(row.stats).length) {
+      const statsStr = JSON.stringify(row.stats)
+      const last = await db.prepare('SELECT ts, stats FROM stats_history WHERE platform = ? AND video_id = ? ORDER BY ts DESC LIMIT 1')
+        .bind(row.platform, row.video_id).all()
+      const prev = last?.results?.[0]
+      const fresh = prev && (now - prev.ts) < 300000 && prev.stats === statsStr
+      if (!fresh) {
+        await db.prepare('INSERT INTO stats_history (platform, video_id, ts, stats) VALUES (?, ?, ?, ?)')
+          .bind(row.platform, row.video_id, now, statsStr).run()
+      }
+    }
   } catch (e) {
     try { console.error('[d1] logQuery failed', e?.message || e) } catch {}
+  }
+}
+
+// Single work detail: the query row + author profile + stats time series.
+export async function getWork (ctx, platform, videoId) {
+  const db = ctx.config.d1
+  if (!db) return null
+  try {
+    await ensureSchema(db)
+    const q = await db.prepare(`SELECT ${COLS} FROM queries WHERE platform = ? AND video_id = ?`).bind(platform, videoId).all()
+    const row = parseRow(q?.results?.[0])
+    if (!row) return null
+    let author = null
+    if (row.author_id) {
+      const a = await db.prepare('SELECT platform, author_id, name, avatar, extra, updated_at FROM authors WHERE platform = ? AND author_id = ?').bind(platform, row.author_id).all()
+      author = parseRow(a?.results?.[0]) || null
+    }
+    const h = await db.prepare('SELECT ts, stats FROM stats_history WHERE platform = ? AND video_id = ? ORDER BY ts ASC LIMIT 500').bind(platform, videoId).all()
+    const history = (h?.results || []).map(r => { let s = {}; try { s = JSON.parse(r.stats) } catch {} return { ts: r.ts, stats: s } })
+    return { work: row, author, history }
+  } catch (e) {
+    try { console.error('[d1] getWork failed', e?.message || e) } catch {}
+    return null
   }
 }
 

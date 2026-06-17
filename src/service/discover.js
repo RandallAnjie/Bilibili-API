@@ -50,7 +50,9 @@ h1{font-family:var(--serif);font-weight:600;font-size:clamp(36px,9vw,64px);line-
 .thumb{position:relative;width:100%;aspect-ratio:16/9;background:#000;overflow:hidden}
 .thumb img{width:100%;height:100%;object-fit:cover;display:block}
 .hot{position:absolute;right:8px;top:8px;font-family:var(--mono);font-size:10px;background:rgba(251,114,153,.92);color:#2a0d16;font-weight:700;padding:2px 7px;border-radius:5px}
-.dur{position:absolute;right:8px;bottom:8px;font-family:var(--mono);font-size:10px;background:rgba(17,20,26,.82);color:#cdd6e2;padding:2px 6px;border-radius:5px}
+.dur{position:absolute;left:8px;bottom:8px;font-family:var(--mono);font-size:10px;background:rgba(17,20,26,.82);color:#cdd6e2;padding:2px 6px;border-radius:5px}
+.datalink{position:absolute;right:8px;bottom:8px;font-size:13px;background:rgba(17,20,26,.82);padding:3px 7px;border-radius:6px;text-decoration:none;backdrop-filter:blur(4px)}
+.datalink:hover{background:var(--blue)}
 .info{padding:10px}
 .who{font-family:var(--mono);font-size:11px;color:var(--blue);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ttl{font-size:13px;margin-top:3px;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
@@ -112,6 +114,7 @@ footer a{color:var(--muted)}
     if(row.cover){var im=el('img');im.loading='lazy';im.src=row.cover;im.alt='';th.appendChild(im)}
     th.appendChild(el('span','hot','🔥'+(row.hits||1)))
     var d=dur(row.duration);if(d)th.appendChild(el('span','dur',d))
+    var dl=el('a','datalink','📊');dl.href='/work?platform='+encodeURIComponent(row.platform)+'&id='+encodeURIComponent(row.video_id);dl.title='数据分析';dl.addEventListener('click',function(e){e.stopPropagation()});th.appendChild(dl)
     a.appendChild(th)
     var info=el('div','info')
     info.appendChild(el('div','who',row.author||'未知作者'))

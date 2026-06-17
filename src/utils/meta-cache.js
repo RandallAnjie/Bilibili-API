@@ -30,6 +30,7 @@ export async function fetchBiliCached (ctx, bvId, refresh = false) {
     title: d.title,
     desc: d.desc,
     pic: d.pic,
+    pubdate: d.pubdate,
     owner: d.owner,
     stat: d.stat,
     duration: d.duration,

@@ -11,9 +11,9 @@
 import bilibiliWebService from './service/bilibili.js'
 import { hybridService, downloadService } from './service/hybrid.js'
 import { proxyService } from './service/proxy.js'
-import { cacheDebugService } from './service/debug.js'
 import { adminPageService, adminRecentService } from './service/admin.js'
 import { discoverPageService, discoverApiService } from './service/discover.js'
+import { workPageService, workApiService } from './service/work.js'
 import appService from './service/app.js'
 import docsService from './service/docs.js'
 import { HTTPException } from './utils/http-exception.js'
@@ -49,6 +49,12 @@ export async function router (request, ctx) {
   if (pathname === '/api/discover' && request.method === 'GET') {
     return discoverApiService(request, ctx)
   }
+  if (pathname === '/work' && request.method === 'GET') {
+    return workPageService(request, ctx)
+  }
+  if (pathname === '/api/work' && request.method === 'GET') {
+    return workApiService(request, ctx)
+  }
   if (pathname.startsWith('/api/bilibili/web/')) {
     return bilibiliWebService(pathname.slice('/api/bilibili/web/'.length), request, ctx)
   }
@@ -60,9 +66,6 @@ export async function router (request, ctx) {
   }
   if (pathname === '/proxy') {
     return proxyService(request, ctx)
-  }
-  if (pathname === '/__cachedebug') {
-    return cacheDebugService(request, ctx)
   }
 
   throw new HTTPException(404, { message: `No route for ${pathname}` })
