@@ -1387,8 +1387,10 @@ function normalize(resp) {
 }
 async function fetchAndStoreComments(ctx, platform, id, { count = 50 } = {}) {
   try {
-    const oid = bv2av(id).toString();
-    const resp = await fetchVideoComments(ctx, oid, 1);
+    const { data } = await fetchBiliCached(ctx, id);
+    const oid = data?.aid;
+    if (!oid) return 0;
+    const resp = await fetchVideoComments(ctx, String(oid), 1);
     return await storeComments(ctx, platform, id, normalize(resp));
   } catch (e) {
     try {
