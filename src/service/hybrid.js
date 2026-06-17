@@ -2,9 +2,11 @@
 import { HTTPException } from '../utils/http-exception.js'
 import { jsonResponse } from '../utils/respond.js'
 import { isAuthorised, getClientIp } from '../utils/auth.js'
-import { hybridParseSingleVideo, resolvePlatformId, fetchRawById, toMinimal } from '../hybrid/crawler.js'
-import { rewriteMinimalToProxy, proxyLink } from '../utils/proxy-link.js'
-import { logQuery, rateLimitHit } from '../utils/db.js'
+import { hybridParseSingleVideo, resolvePlatformId } from '../hybrid/crawler.js'
+import { rewriteMinimalToProxy } from '../utils/proxy-link.js'
+import { rateLimitHit } from '../utils/db.js'
+import { ingestWork } from '../utils/ingest.js'
+import { maybeFetchComments } from '../utils/comments.js'
 
 const PLATFORM = 'bilibili'
 const truthy = (v) => ['1', 'true', 'yes', 'on'].includes(String(v).toLowerCase())
@@ -39,36 +41,10 @@ export async function hybridService (route, request, ctx) {
     const linkTtl = guest ? ctx.config.guest.linkTtlSec : undefined
 
     const { platform, id } = await resolvePlatformId(target)
-    const { raw } = await fetchRawById(ctx, platform, id, refresh)
-    const min = toMinimal(platform, id, raw)
+    const { raw, min } = await ingestWork(ctx, request, platform, id, target, refresh)
 
-    const o = min.author || {}
-    const s = min.statistics || {}
-    await logQuery(ctx, {
-      platform,
-      video_id: id,
-      type: 'video',
-      author: o.name || null,
-      authorInfo: o.mid
-        ? {
-            id: String(o.mid),
-            name: o.name || null,
-            avatar: proxyLink(request, ctx, platform, id, 'avatar'),
-            extra: { mid: o.mid }
-          }
-        : null,
-      create_time: raw.pubdate || null,
-      stats: {
-        play: s.view, digg: s.like, comment: s.reply, share: s.share,
-        danmaku: s.danmaku, coin: s.coin, collect: s.favorite
-      },
-      description: min.desc || null,
-      original_url: target,
-      cover: proxyLink(request, ctx, platform, id, 'cover'),
-      play: proxyLink(request, ctx, platform, id, 'mp4'),
-      duration: raw.duration || null,
-      extra: { stats: min.statistics || null }
-    })
+    // Async: refresh this work's comments into D1 (best-effort, 6h TTL).
+    if (ctx.waitUntil) ctx.waitUntil(maybeFetchComments(ctx, platform, id))
 
     let data = minimal ? min : raw
     if (minimal && proxy) data = rewriteMinimalToProxy(data, request, ctx, linkTtl)

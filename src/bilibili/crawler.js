@@ -36,6 +36,14 @@ export function fetchUserProfile (ctx, mid) {
   return fetchGetJson(`${EP.USER_DETAIL}?${q}`, biliHeaders(ctx))
 }
 
+export function fetchVideoTags (ctx, bvId) {
+  return fetchGetJson(`${EP.VIDEO_TAGS}?bvid=${encodeURIComponent(bvId)}`, biliHeaders(ctx))
+}
+
+export function fetchUserStat (ctx, mid) {
+  return fetchGetJson(`${EP.RELATION_STAT}?vmid=${encodeURIComponent(mid)}`, biliHeaders(ctx))
+}
+
 export function fetchUserPostVideos (ctx, mid, pn = 1) {
   const q = wbiQuery({ mid: String(mid), pn: String(pn), ps: '20', order: 'pubdate', platform: 'web', web_location: '1550101' })
   return fetchGetJson(`${EP.USER_POST}?${q}`, biliHeaders(ctx))

@@ -86,6 +86,7 @@ footer a{color:var(--muted)}
     <button class="tab on" data-sort=recent id=tabRecent>最近</button>
     <button class=tab data-sort=hot id=tabHot>热度</button>
     <span class=spacer></span>
+    <a href="/search">搜索</a>
     <a href="/">← 去解析</a>
   </div>
   <p id=status class=status>加载中…</p>
@@ -117,7 +118,8 @@ footer a{color:var(--muted)}
     var dl=el('a','datalink','📊');dl.href='/work?platform='+encodeURIComponent(row.platform)+'&id='+encodeURIComponent(row.video_id);dl.title='数据分析';dl.addEventListener('click',function(e){e.stopPropagation()});th.appendChild(dl)
     a.appendChild(th)
     var info=el('div','info')
-    info.appendChild(el('div','who',row.author||'未知作者'))
+    if(row.author_id){var wa=el('a','who',row.author||'未知作者');wa.href='/author?platform='+encodeURIComponent(row.platform)+'&id='+encodeURIComponent(row.author_id);wa.style.textDecoration='none';wa.addEventListener('click',function(e){e.stopPropagation()});info.appendChild(wa)}
+    else info.appendChild(el('div','who',row.author||'未知作者'))
     info.appendChild(el('div','ttl',row.description||'(无标题)'))
     info.appendChild(el('div','when',ago(row.updated_at)))
     a.appendChild(info)

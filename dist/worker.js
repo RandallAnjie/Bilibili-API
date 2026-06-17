@@ -179,8 +179,8 @@ function sha1Bytes(input) {
   const w = new Array(80);
   for (let off = 0; off < bytes.length; off += 64) {
     for (let i = 0; i < 16; i++) {
-      const j = off + i * 4;
-      w[i] = (bytes[j] << 24 | bytes[j + 1] << 16 | bytes[j + 2] << 8 | bytes[j + 3]) >>> 0;
+      const j2 = off + i * 4;
+      w[i] = (bytes[j2] << 24 | bytes[j2 + 1] << 16 | bytes[j2 + 2] << 8 | bytes[j2 + 3]) >>> 0;
     }
     for (let i = 16; i < 80; i++) {
       w[i] = rol(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
@@ -400,8 +400,8 @@ function cycle(state, blk) {
 function bytesToWords(bytes, start) {
   const w = new Array(16);
   for (let i = 0; i < 16; i++) {
-    const j = start + i * 4;
-    w[i] = bytes[j] | bytes[j + 1] << 8 | bytes[j + 2] << 16 | bytes[j + 3] << 24;
+    const j2 = start + i * 4;
+    w[i] = bytes[j2] | bytes[j2 + 1] << 8 | bytes[j2 + 2] << 16 | bytes[j2 + 3] << 24;
   }
   return w;
 }
@@ -494,10 +494,14 @@ var BiliEndpoints = {
   // wbi
   VIDEO_PARTS: `${API}/x/player/pagelist`,
   // ?bvid=
+  VIDEO_TAGS: `${API}/x/tag/archive/tags`,
+  // ?bvid=  (UP-assigned tags)
   USER_POST: `${API}/x/space/wbi/arc/search`,
   // wbi
   USER_DETAIL: `${API}/x/space/wbi/acc/info`,
   // wbi
+  RELATION_STAT: `${API}/x/relation/stat`,
+  // ?vmid=  (follower/following count)
   COM_POPULAR: `${API}/x/web-interface/popular`,
   // wbi
   VIDEO_COMMENTS: `${API}/x/v2/reply`,
@@ -532,6 +536,12 @@ function fetchVideoParts(ctx, bvId) {
 function fetchUserProfile(ctx, mid) {
   const q2 = wbiQuery({ mid: String(mid), platform: "web", web_location: "1550101" });
   return fetchGetJson(`${BiliEndpoints.USER_DETAIL}?${q2}`, biliHeaders(ctx));
+}
+function fetchVideoTags(ctx, bvId) {
+  return fetchGetJson(`${BiliEndpoints.VIDEO_TAGS}?bvid=${encodeURIComponent(bvId)}`, biliHeaders(ctx));
+}
+function fetchUserStat(ctx, mid) {
+  return fetchGetJson(`${BiliEndpoints.RELATION_STAT}?vmid=${encodeURIComponent(mid)}`, biliHeaders(ctx));
 }
 function fetchUserPostVideos(ctx, mid, pn = 1) {
   const q2 = wbiQuery({ mid: String(mid), pn: String(pn), ps: "20", order: "pubdate", platform: "web", web_location: "1550101" });
@@ -775,11 +785,11 @@ async function r2PutRetry(bucket, key, makeBody, opts, tries = 4) {
 }
 function putJson(bucket, ctx, key, obj) {
   if (!bucket) return;
-  const json = JSON.stringify(obj);
+  const json2 = JSON.stringify(obj);
   const p = r2PutRetry(
     bucket,
     key,
-    () => new Response(json).body,
+    () => new Response(json2).body,
     { httpMetadata: { contentType: "application/json; charset=utf-8" } },
     2
   );
@@ -818,10 +828,12 @@ async function fetchBiliCached(ctx, bvId, refresh = false) {
     desc: d.desc,
     pic: d.pic,
     pubdate: d.pubdate,
+    tname: d.tname || null,
     owner: d.owner,
     stat: d.stat,
     duration: d.duration,
     pages: Array.isArray(d.pages) ? d.pages.length : 1,
+    pages_list: Array.isArray(d.pages) ? d.pages.map((p) => ({ cid: p.cid, page: p.page, part: p.part, duration: p.duration })) : [],
     dash: dash ? { video: dash.video || [], audio: dash.audio || [] } : null,
     durl: durl || null
   };
@@ -949,70 +961,114 @@ async function ensureSchema(db) {
     video_id TEXT NOT NULL,
     type TEXT,
     author TEXT,
+    author_id TEXT,
     description TEXT,
     original_url TEXT,
     cover TEXT,
     play TEXT,
     duration INTEGER,
+    create_time INTEGER,
+    tags TEXT,
+    music TEXT,
+    parts TEXT,
     extra TEXT,
     hits INTEGER NOT NULL DEFAULT 1,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     UNIQUE(platform, video_id)
   )`).run();
-  for (const col of ["duration INTEGER", "extra TEXT", "create_time INTEGER", "author_id TEXT"]) {
+  for (const col of ["duration INTEGER", "extra TEXT", "create_time INTEGER", "author_id TEXT", "tags TEXT", "music TEXT", "parts TEXT"]) {
     try {
       await db.prepare(`ALTER TABLE queries ADD COLUMN ${col}`).run();
     } catch {
     }
   }
   await db.prepare(`CREATE TABLE IF NOT EXISTS authors (
-    platform TEXT NOT NULL,
-    author_id TEXT NOT NULL,
-    name TEXT,
-    avatar TEXT,
-    extra TEXT,
-    updated_at INTEGER NOT NULL,
-    PRIMARY KEY(platform, author_id)
+    platform TEXT NOT NULL, author_id TEXT NOT NULL, name TEXT, avatar TEXT,
+    extra TEXT, updated_at INTEGER NOT NULL, PRIMARY KEY(platform, author_id)
   )`).run();
   await db.prepare(`CREATE TABLE IF NOT EXISTS stats_history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    platform TEXT NOT NULL,
-    video_id TEXT NOT NULL,
-    ts INTEGER NOT NULL,
-    stats TEXT
+    id INTEGER PRIMARY KEY AUTOINCREMENT, platform TEXT NOT NULL,
+    video_id TEXT NOT NULL, ts INTEGER NOT NULL, stats TEXT
   )`).run();
-  try {
-    await db.prepare("CREATE INDEX IF NOT EXISTS idx_stats_vid ON stats_history (platform, video_id, ts)").run();
-  } catch {
+  await db.prepare(`CREATE TABLE IF NOT EXISTS author_stats_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, platform TEXT NOT NULL,
+    author_id TEXT NOT NULL, ts INTEGER NOT NULL, follower INTEGER, extra TEXT
+  )`).run();
+  await db.prepare(`CREATE TABLE IF NOT EXISTS comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, platform TEXT NOT NULL,
+    video_id TEXT NOT NULL, comment_id TEXT NOT NULL, parent_id TEXT,
+    author TEXT, author_id TEXT, avatar TEXT, text TEXT, likes INTEGER,
+    ctime INTEGER, fetched_at INTEGER NOT NULL, UNIQUE(platform, video_id, comment_id)
+  )`).run();
+  await db.prepare(`CREATE TABLE IF NOT EXISTS kv_meta (
+    k TEXT PRIMARY KEY, v TEXT, ts INTEGER NOT NULL
+  )`).run();
+  for (const sql of [
+    "CREATE INDEX IF NOT EXISTS idx_stats_vid ON stats_history (platform, video_id, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_astats ON author_stats_history (platform, author_id, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_cmt ON comments (platform, video_id, likes)"
+  ]) {
+    try {
+      await db.prepare(sql).run();
+    } catch {
+    }
   }
   schemaReady = true;
 }
-var COLS = "platform, video_id, type, author, author_id, description, original_url, cover, play, duration, create_time, extra, hits, created_at, updated_at";
+var COLS = "platform, video_id, type, author, author_id, description, original_url, cover, play, duration, create_time, tags, music, parts, extra, hits, created_at, updated_at";
+var JSON_COLS = ["extra", "tags", "music", "parts"];
 var parseRow = (r) => {
-  if (r && typeof r.extra === "string") {
-    try {
-      r.extra = JSON.parse(r.extra);
-    } catch {
-      r.extra = null;
+  if (!r) return r;
+  for (const c of JSON_COLS) {
+    if (typeof r[c] === "string") {
+      try {
+        r[c] = JSON.parse(r[c]);
+      } catch {
+        r[c] = null;
+      }
     }
   }
   return r;
 };
+var j = (v) => v == null ? null : JSON.stringify(v);
+async function metaGet(ctx, k) {
+  const db = ctx.config.d1;
+  if (!db) return null;
+  try {
+    await ensureSchema(db);
+    const r = await db.prepare("SELECT v, ts FROM kv_meta WHERE k = ?").bind(k).all();
+    return r?.results?.[0] || null;
+  } catch {
+    return null;
+  }
+}
+async function metaSet(ctx, k, v) {
+  const db = ctx.config.d1;
+  if (!db) return;
+  try {
+    await ensureSchema(db);
+    await db.prepare("INSERT INTO kv_meta (k, v, ts) VALUES (?, ?, ?) ON CONFLICT(k) DO UPDATE SET v = ?, ts = ?").bind(k, String(v ?? ""), Date.now(), String(v ?? ""), Date.now()).run();
+  } catch {
+  }
+}
 async function logQuery(ctx, row) {
   const db = ctx.config.d1;
   if (!db) return;
   try {
     await ensureSchema(db);
     const now = Date.now();
-    const extra = row.extra ? JSON.stringify(row.extra) : null;
+    const extra = j(row.extra);
+    const tags = j(row.tags);
+    const music = j(row.music);
+    const parts = j(row.parts);
     const authorId = row.authorInfo?.id || null;
     await db.prepare(`INSERT INTO queries
-      (platform, video_id, type, author, author_id, description, original_url, cover, play, duration, create_time, extra, hits, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+      (platform, video_id, type, author, author_id, description, original_url, cover, play, duration, create_time, tags, music, parts, extra, hits, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
       ON CONFLICT(platform, video_id) DO UPDATE SET
         hits = hits + 1, updated_at = ?, type = ?, author = ?, author_id = ?,
-        description = ?, original_url = ?, cover = ?, play = ?, duration = ?, create_time = ?, extra = ?`).bind(
+        description = ?, original_url = ?, cover = ?, play = ?, duration = ?, create_time = ?, tags = ?, music = ?, parts = ?, extra = ?`).bind(
       row.platform,
       row.video_id,
       row.type,
@@ -1024,6 +1080,9 @@ async function logQuery(ctx, row) {
       row.play,
       row.duration ?? null,
       row.create_time ?? null,
+      tags,
+      music,
+      parts,
       extra,
       now,
       now,
@@ -1037,14 +1096,25 @@ async function logQuery(ctx, row) {
       row.play,
       row.duration ?? null,
       row.create_time ?? null,
+      tags,
+      music,
+      parts,
       extra
     ).run();
     if (authorId) {
       const a = row.authorInfo;
-      const aExtra = a.extra ? JSON.stringify(a.extra) : null;
+      const aExtra = j(a.extra);
       await db.prepare(`INSERT INTO authors (platform, author_id, name, avatar, extra, updated_at)
         VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(platform, author_id) DO UPDATE SET name = ?, avatar = ?, extra = ?, updated_at = ?`).bind(row.platform, authorId, a.name ?? null, a.avatar ?? null, aExtra, now, a.name ?? null, a.avatar ?? null, aExtra, now).run();
+      const follower = a.extra?.follower;
+      if (follower != null) {
+        const last = await db.prepare("SELECT ts, follower FROM author_stats_history WHERE platform = ? AND author_id = ? ORDER BY ts DESC LIMIT 1").bind(row.platform, authorId).all();
+        const p = last?.results?.[0];
+        if (!p || p.follower !== follower || now - p.ts > 216e5) {
+          await db.prepare("INSERT INTO author_stats_history (platform, author_id, ts, follower) VALUES (?, ?, ?, ?)").bind(row.platform, authorId, now, follower).run();
+        }
+      }
     }
     if (row.stats && Object.keys(row.stats).length) {
       const statsStr = JSON.stringify(row.stats);
@@ -1060,6 +1130,40 @@ async function logQuery(ctx, row) {
       console.error("[d1] logQuery failed", e?.message || e);
     } catch {
     }
+  }
+}
+async function pageQueries(ctx, where, binds, order, limit, offset) {
+  const db = ctx.config.d1;
+  if (!db) return { rows: [], total: 0 };
+  try {
+    await ensureSchema(db);
+    const res = await db.prepare(`SELECT ${COLS} FROM queries ${where} ORDER BY ${order} LIMIT ? OFFSET ?`).bind(...binds, limit, offset).all();
+    const cnt = await db.prepare(`SELECT COUNT(*) AS n FROM queries ${where}`).bind(...binds).all();
+    return { rows: (res?.results || []).map(parseRow), total: cnt?.results?.[0]?.n || 0 };
+  } catch (e) {
+    try {
+      console.error("[d1] pageQueries failed", e?.message || e);
+    } catch {
+    }
+    return { rows: [], total: 0 };
+  }
+}
+var recentQueries = (ctx, limit = 10, offset = 0) => pageQueries(ctx, "", [], "updated_at DESC", limit, offset);
+var discoverQueries = (ctx, sort = "recent", limit = 12, offset = 0) => pageQueries(ctx, "", [], sort === "hot" ? "hits DESC, updated_at DESC" : "updated_at DESC", limit, offset);
+function searchQueries(ctx, q2, platform, limit = 12, offset = 0) {
+  const like = `%${String(q2 || "").trim()}%`;
+  if (platform) return pageQueries(ctx, "WHERE platform = ? AND (description LIKE ? OR author LIKE ? OR tags LIKE ?)", [platform, like, like, like], "hits DESC, updated_at DESC", limit, offset);
+  return pageQueries(ctx, "WHERE description LIKE ? OR author LIKE ? OR tags LIKE ?", [like, like, like], "hits DESC, updated_at DESC", limit, offset);
+}
+async function staleQueries(ctx, limit = 15) {
+  const db = ctx.config.d1;
+  if (!db) return [];
+  try {
+    await ensureSchema(db);
+    const r = await db.prepare(`SELECT platform, video_id, original_url FROM queries ORDER BY updated_at ASC LIMIT ?`).bind(limit).all();
+    return r?.results || [];
+  } catch {
+    return [];
   }
 }
 async function getWork(ctx, platform, videoId) {
@@ -1093,24 +1197,68 @@ async function getWork(ctx, platform, videoId) {
     return null;
   }
 }
-async function pageQueries(ctx, order, limit, offset) {
+async function getAuthor(ctx, platform, authorId, limit = 24, offset = 0) {
+  const db = ctx.config.d1;
+  if (!db) return null;
+  try {
+    await ensureSchema(db);
+    const a = await db.prepare("SELECT platform, author_id, name, avatar, extra, updated_at FROM authors WHERE platform = ? AND author_id = ?").bind(platform, authorId).all();
+    const author = parseRow(a?.results?.[0]);
+    if (!author) return null;
+    const works = await pageQueries(ctx, "WHERE platform = ? AND author_id = ?", [platform, authorId], "create_time DESC, updated_at DESC", limit, offset);
+    const fh = await db.prepare("SELECT ts, follower FROM author_stats_history WHERE platform = ? AND author_id = ? ORDER BY ts ASC LIMIT 500").bind(platform, authorId).all();
+    return { author, works: works.rows, total: works.total, follower_history: fh?.results || [] };
+  } catch (e) {
+    try {
+      console.error("[d1] getAuthor failed", e?.message || e);
+    } catch {
+    }
+    return null;
+  }
+}
+async function storeComments(ctx, platform, videoId, comments) {
+  const db = ctx.config.d1;
+  if (!db || !comments?.length) return 0;
+  try {
+    await ensureSchema(db);
+    const now = Date.now();
+    let n = 0;
+    for (const c of comments) {
+      if (!c.comment_id) continue;
+      try {
+        await db.prepare(`INSERT INTO comments (platform, video_id, comment_id, parent_id, author, author_id, avatar, text, likes, ctime, fetched_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(platform, video_id, comment_id) DO UPDATE SET likes = ?, text = ?, fetched_at = ?`).bind(platform, videoId, String(c.comment_id), c.parent_id ?? null, c.author ?? null, c.author_id ?? null, c.avatar ?? null, c.text ?? null, c.likes ?? 0, c.ctime ?? null, now, c.likes ?? 0, c.text ?? null, now).run();
+        n++;
+      } catch {
+      }
+    }
+    await metaSet(ctx, `cmt:${platform}:${videoId}`, now);
+    return n;
+  } catch (e) {
+    try {
+      console.error("[d1] storeComments failed", e?.message || e);
+    } catch {
+    }
+    return 0;
+  }
+}
+async function getComments(ctx, platform, videoId, limit = 20, offset = 0) {
   const db = ctx.config.d1;
   if (!db) return { rows: [], total: 0 };
   try {
     await ensureSchema(db);
-    const res = await db.prepare(`SELECT ${COLS} FROM queries ORDER BY ${order} LIMIT ? OFFSET ?`).bind(limit, offset).all();
-    const cnt = await db.prepare("SELECT COUNT(*) AS n FROM queries").all();
-    return { rows: (res?.results || []).map(parseRow), total: cnt?.results?.[0]?.n || 0 };
+    const r = await db.prepare("SELECT comment_id, parent_id, author, author_id, avatar, text, likes, ctime FROM comments WHERE platform = ? AND video_id = ? ORDER BY likes DESC, ctime DESC LIMIT ? OFFSET ?").bind(platform, videoId, limit, offset).all();
+    const cnt = await db.prepare("SELECT COUNT(*) AS n FROM comments WHERE platform = ? AND video_id = ?").bind(platform, videoId).all();
+    return { rows: r?.results || [], total: cnt?.results?.[0]?.n || 0 };
   } catch (e) {
     try {
-      console.error("[d1] pageQueries failed", e?.message || e);
+      console.error("[d1] getComments failed", e?.message || e);
     } catch {
     }
     return { rows: [], total: 0 };
   }
 }
-var recentQueries = (ctx, limit = 10, offset = 0) => pageQueries(ctx, "updated_at DESC", limit, offset);
-var discoverQueries = (ctx, sort = "recent", limit = 12, offset = 0) => pageQueries(ctx, sort === "hot" ? "hits DESC, updated_at DESC" : "updated_at DESC", limit, offset);
 async function rateLimitHit(ctx, ip, limit, windowSec) {
   if (ctx.config.kv) return rateLimitKV(ctx.config.kv, ip, limit, windowSec);
   if (ctx.config.d1) return rateLimitD1(ctx.config.d1, ip, limit, windowSec);
@@ -1160,6 +1308,102 @@ async function rateLimitD1(db, ip, limit, windowSec) {
   }
 }
 
+// src/utils/ingest.js
+async function fetchFollower(ctx, mid) {
+  try {
+    const r = await fetchUserStat(ctx, mid);
+    const f = r?.data?.follower;
+    return typeof f === "number" ? f : null;
+  } catch {
+    return null;
+  }
+}
+async function fetchTags(ctx, bvId, tname) {
+  try {
+    const r = await fetchVideoTags(ctx, bvId);
+    const tags = (r?.data || []).map((t) => t.tag_name).filter(Boolean);
+    if (tags.length) return tags.slice(0, 20);
+  } catch {
+  }
+  return tname ? [tname] : null;
+}
+async function ingestWork(ctx, request, platform, id, target, refresh = false) {
+  const { raw } = await fetchRawById(ctx, platform, id, refresh);
+  const min = toMinimal(platform, id, raw);
+  const o = min.author || {};
+  const s = min.statistics || {};
+  const [follower, tags] = await Promise.all([
+    o.mid ? fetchFollower(ctx, o.mid) : Promise.resolve(null),
+    fetchTags(ctx, id, raw.tname)
+  ]);
+  await logQuery(ctx, {
+    platform,
+    video_id: id,
+    type: "video",
+    author: o.name || null,
+    authorInfo: o.mid ? {
+      id: String(o.mid),
+      name: o.name || null,
+      avatar: proxyLink(request, ctx, platform, id, "avatar"),
+      extra: { mid: o.mid, follower, signature: o.sign || null }
+    } : null,
+    create_time: raw.pubdate || null,
+    stats: {
+      play: s.view,
+      digg: s.like,
+      comment: s.reply,
+      share: s.share,
+      danmaku: s.danmaku,
+      coin: s.coin,
+      collect: s.favorite
+    },
+    tags,
+    music: null,
+    parts: Array.isArray(raw.pages_list) && raw.pages_list.length > 1 ? raw.pages_list : null,
+    description: min.desc || null,
+    original_url: target,
+    cover: proxyLink(request, ctx, platform, id, "cover"),
+    play: proxyLink(request, ctx, platform, id, "mp4"),
+    duration: raw.duration || null,
+    extra: { stats: min.statistics || null }
+  });
+  return { raw, min };
+}
+
+// src/utils/comments.js
+var TTL = 6 * 3600 * 1e3;
+function normalize(resp) {
+  const list = resp?.data?.replies || [];
+  return list.map((c) => ({
+    comment_id: c.rpid != null ? String(c.rpid) : null,
+    parent_id: null,
+    text: c.content?.message || "",
+    author: c.member?.uname || null,
+    author_id: c.member?.mid != null ? String(c.member.mid) : null,
+    avatar: c.member?.avatar || null,
+    likes: c.like ?? 0,
+    ctime: c.ctime ?? null
+  })).filter((c) => c.comment_id);
+}
+async function fetchAndStoreComments(ctx, platform, id, { count = 50 } = {}) {
+  try {
+    const oid = bv2av(id).toString();
+    const resp = await fetchVideoComments(ctx, oid, 1);
+    return await storeComments(ctx, platform, id, normalize(resp));
+  } catch (e) {
+    try {
+      console.error("[comments] fetch failed", e?.message || e);
+    } catch {
+    }
+    return 0;
+  }
+}
+async function maybeFetchComments(ctx, platform, id) {
+  const m = await metaGet(ctx, `cmt:${platform}:${id}`);
+  if (m && Date.now() - m.ts < TTL) return 0;
+  return fetchAndStoreComments(ctx, platform, id);
+}
+
 // src/service/hybrid.js
 var PLATFORM2 = "bilibili";
 var truthy = (v) => ["1", "true", "yes", "on"].includes(String(v).toLowerCase());
@@ -1190,38 +1434,8 @@ async function hybridService(route, request, ctx) {
     const refresh = guest ? false : truthy(url.searchParams.get("refresh") ?? "false");
     const linkTtl = guest ? ctx.config.guest.linkTtlSec : void 0;
     const { platform, id } = await resolvePlatformId(target);
-    const { raw } = await fetchRawById(ctx, platform, id, refresh);
-    const min = toMinimal(platform, id, raw);
-    const o = min.author || {};
-    const s = min.statistics || {};
-    await logQuery(ctx, {
-      platform,
-      video_id: id,
-      type: "video",
-      author: o.name || null,
-      authorInfo: o.mid ? {
-        id: String(o.mid),
-        name: o.name || null,
-        avatar: proxyLink(request, ctx, platform, id, "avatar"),
-        extra: { mid: o.mid }
-      } : null,
-      create_time: raw.pubdate || null,
-      stats: {
-        play: s.view,
-        digg: s.like,
-        comment: s.reply,
-        share: s.share,
-        danmaku: s.danmaku,
-        coin: s.coin,
-        collect: s.favorite
-      },
-      description: min.desc || null,
-      original_url: target,
-      cover: proxyLink(request, ctx, platform, id, "cover"),
-      play: proxyLink(request, ctx, platform, id, "mp4"),
-      duration: raw.duration || null,
-      extra: { stats: min.statistics || null }
-    });
+    const { raw, min } = await ingestWork(ctx, request, platform, id, target, refresh);
+    if (ctx.waitUntil) ctx.waitUntil(maybeFetchComments(ctx, platform, id));
     let data = minimal ? min : raw;
     if (minimal && proxy) data = rewriteMinimalToProxy(data, request, ctx, linkTtl);
     return jsonResponse(data, { router: "hybrid/video_data", params: { url: target, minimal, proxy, guest } });
@@ -1580,6 +1794,7 @@ footer a{color:var(--muted)}
     <button class="tab on" data-sort=recent id=tabRecent>\u6700\u8FD1</button>
     <button class=tab data-sort=hot id=tabHot>\u70ED\u5EA6</button>
     <span class=spacer></span>
+    <a href="/search">\u641C\u7D22</a>
     <a href="/">\u2190 \u53BB\u89E3\u6790</a>
   </div>
   <p id=status class=status>\u52A0\u8F7D\u4E2D\u2026</p>
@@ -1611,7 +1826,8 @@ footer a{color:var(--muted)}
     var dl=el('a','datalink','\u{1F4CA}');dl.href='/work?platform='+encodeURIComponent(row.platform)+'&id='+encodeURIComponent(row.video_id);dl.title='\u6570\u636E\u5206\u6790';dl.addEventListener('click',function(e){e.stopPropagation()});th.appendChild(dl)
     a.appendChild(th)
     var info=el('div','info')
-    info.appendChild(el('div','who',row.author||'\u672A\u77E5\u4F5C\u8005'))
+    if(row.author_id){var wa=el('a','who',row.author||'\u672A\u77E5\u4F5C\u8005');wa.href='/author?platform='+encodeURIComponent(row.platform)+'&id='+encodeURIComponent(row.author_id);wa.style.textDecoration='none';wa.addEventListener('click',function(e){e.stopPropagation()});info.appendChild(wa)}
+    else info.appendChild(el('div','who',row.author||'\u672A\u77E5\u4F5C\u8005'))
     info.appendChild(el('div','ttl',row.description||'(\u65E0\u6807\u9898)'))
     info.appendChild(el('div','when',ago(row.updated_at)))
     a.appendChild(info)
@@ -1713,6 +1929,8 @@ a.back:hover{color:var(--teal)}
 .author img{width:38px;height:38px;border-radius:50%;object-fit:cover;background:#0e0d12;border:1px solid var(--line)}
 .author .nm{font-size:15px} .author .fo{font-family:var(--mono);font-size:11px;color:var(--faint)}
 .facts{font-family:var(--mono);font-size:12px;color:var(--muted);line-height:1.9}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 0}
+.chip{font-family:var(--mono);font-size:11px;color:var(--teal);border:1px solid var(--line);border-radius:999px;padding:2px 9px;text-decoration:none}
 .acts{margin-top:12px;display:flex;gap:9px;flex-wrap:wrap}
 .btn{display:inline-block;text-decoration:none;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--ink);font-family:var(--mono);font-size:12px;padding:8px 13px;border-radius:8px}
 .btn.go{border-color:var(--coral);background:var(--coral);color:#1a0c0f;font-weight:700}
@@ -1729,6 +1947,13 @@ h2{font-size:15px;margin:34px 0 6px;font-family:var(--serif);letter-spacing:.04e
 svg{width:100%;height:auto;display:block}
 .hint{font-family:var(--mono);font-size:12px;color:var(--faint);margin-top:8px}
 .status{font-family:var(--mono);font-size:12px;color:var(--muted);margin:20px 2px}
+.cmts{display:flex;flex-direction:column;gap:12px;margin-top:8px}
+.cmt{display:flex;gap:10px}
+.cmt img{width:32px;height:32px;border-radius:50%;object-fit:cover;background:#0e0d12;border:1px solid var(--line);flex:0 0 32px}
+.cmt .cb{min-width:0}
+.cmt .ca{font-family:var(--mono);font-size:12px;color:var(--teal)}
+.cmt .ct{font-size:14px;margin:2px 0;word-break:break-word}
+.cmt .cm{font-family:var(--mono);font-size:11px;color:var(--faint)}
 </style>
 </head>
 <body>
@@ -1798,12 +2023,15 @@ svg{width:100%;height:auto;display:block}
     var ab=el('div','author')
     if(au.avatar){var av=el('img');av.src=au.avatar;ab.appendChild(av)}
     var ai=el('div')
-    ai.appendChild(el('div','nm',(au.name||w.author||'\u672A\u77E5\u4F5C\u8005')))
+    if(w.author_id){var na=el('a','nm',(au.name||w.author||'\u672A\u77E5\u4F5C\u8005'));na.href='/author?platform='+encodeURIComponent(w.platform)+'&id='+encodeURIComponent(w.author_id);na.style.color='var(--ink)';na.style.textDecoration='none';ai.appendChild(na)}
+    else ai.appendChild(el('div','nm',(au.name||w.author||'\u672A\u77E5\u4F5C\u8005')))
     if(aex.follower!=null)ai.appendChild(el('div','fo','\u7C89\u4E1D '+fmt(aex.follower)))
     ab.appendChild(ai);meta.appendChild(ab)
     var facts=el('div','facts')
     facts.innerHTML='\u5E73\u53F0 '+w.platform+' \xB7 '+(w.type==='image'?'\u56FE\u96C6':'\u89C6\u9891')+'<br>\u53D1\u5E03 '+datestr(w.create_time)+(w.duration?(' \xB7 \u65F6\u957F '+w.duration+'s'):'')+'<br>\u89E3\u6790 '+w.hits+' \u6B21 \xB7 \u9996\u6B21 '+tstr(w.created_at)
     meta.appendChild(facts)
+    if(Array.isArray(w.parts)&&w.parts.length>1)meta.appendChild(el('div','facts','\u5206P '+w.parts.length+' \u4E2A'))
+    if(Array.isArray(w.tags)&&w.tags.length){var tg=el('div','chips');w.tags.slice(0,15).forEach(function(t){var c=el('a','chip','#'+t);c.href='/search?q='+encodeURIComponent(t);tg.appendChild(c)});meta.appendChild(tg)}
     var acts=el('div','acts')
     var go=el('a','btn go','\u91CD\u65B0\u89E3\u6790(\u52A0\u4E00\u4E2A\u6570\u636E\u70B9)');go.href='/?u='+encodeURIComponent(w.original_url||'');acts.appendChild(go)
     if(w.original_url){var o=el('a','btn','\u539F\u94FE');o.href=w.original_url;o.target='_blank';o.rel='noopener';acts.appendChild(o)}
@@ -1821,6 +2049,28 @@ svg{width:100%;height:auto;display:block}
     if(hist.length<2){cw.innerHTML='<div class=hint>\u5DF2\u6709 '+hist.length+' \u4E2A\u6570\u636E\u70B9\u3002\u591A\u89E3\u6790\u51E0\u6B21\uFF08\u6216\u8FC7\u6BB5\u65F6\u95F4\u518D\u89E3\u6790\uFF09\u5373\u53EF\u5F62\u6210\u8D8B\u52BF\u66F2\u7EBF\u3002</div>'}
     else cw.innerHTML=lineChart(hist)
     app.appendChild(cw)
+    // comments
+    app.appendChild(el('h2',null,'\u70ED\u95E8\u8BC4\u8BBA'))
+    var cm=el('div','cmts');cm.id='cmts';cm.appendChild(el('div','hint','\u52A0\u8F7D\u4E2D\u2026'));app.appendChild(cm)
+    loadComments(w.platform,w.video_id)
+  }
+  async function loadComments(platform,id){
+    var box=$('#cmts');if(!box)return
+    try{
+      var r=await fetch('/api/comments?platform='+encodeURIComponent(platform)+'&id='+encodeURIComponent(id)+'&limit=30')
+      var j=await r.json();var rows=j.data||[]
+      box.innerHTML=''
+      if(!rows.length){box.appendChild(el('div','hint','\u6682\u65E0\u8BC4\u8BBA\uFF08\u6216\u6B63\u5728\u6293\u53D6\uFF0C\u7A0D\u540E\u5237\u65B0\uFF09'));return}
+      rows.forEach(function(c){
+        var it=el('div','cmt')
+        if(c.avatar){var im=el('img');im.src=c.avatar;im.loading='lazy';it.appendChild(im)}
+        var b=el('div','cb')
+        b.appendChild(el('div','ca',c.author||'\u533F\u540D'))
+        b.appendChild(el('div','ct',c.text||''))
+        b.appendChild(el('div','cm','\u8D5E '+fmt(c.likes)+(c.ctime?(' \xB7 '+datestr(c.ctime)):'')))
+        it.appendChild(b);box.appendChild(it)
+      })
+    }catch(e){box.innerHTML='<div class=hint>\u8BC4\u8BBA\u52A0\u8F7D\u5931\u8D25\uFF1A'+e.message+'</div>'}
   }
   load()
 })();
@@ -1828,11 +2078,379 @@ svg{width:100%;height:auto;display:block}
 </body>
 </html>`;
 
-// src/service/app.js
-async function appService(request, ctx) {
+// src/service/comments.js
+async function commentsApiService(request, ctx) {
+  const url = new URL(request.url);
+  const platform = url.searchParams.get("platform") || "";
+  const id = url.searchParams.get("id") || "";
+  if (!platform || !id) throw new HTTPException(400, { message: "platform and id required" });
+  const page = Math.max(1, Number(url.searchParams.get("page")) || 1);
+  const limit = Math.min(50, Math.max(1, Number(url.searchParams.get("limit")) || 20));
+  let { rows, total } = await getComments(ctx, platform, id, limit, (page - 1) * limit);
+  if (!total && page === 1) {
+    const g = ctx.config.guest;
+    const rl = await rateLimitHit(ctx, getClientIp(request), g.limit, g.windowSec);
+    if (rl.allowed) {
+      await maybeFetchComments(ctx, platform, id);
+      ({ rows, total } = await getComments(ctx, platform, id, limit, 0));
+    }
+  }
+  return rawJsonResponse({ code: 200, platform, id, page, limit, total, count: rows.length, data: rows });
+}
+
+// src/service/search.js
+async function searchApiService(request, ctx) {
+  const url = new URL(request.url);
+  const q2 = (url.searchParams.get("q") || "").trim();
+  const platform = url.searchParams.get("platform") || "";
+  const limit = Math.min(48, Math.max(1, Number(url.searchParams.get("limit")) || 12));
+  const page = Math.max(1, Number(url.searchParams.get("page")) || 1);
+  if (!q2) return rawJsonResponse({ code: 200, q: q2, page, total: 0, pages: 1, data: [] });
+  const { rows, total } = await searchQueries(ctx, q2, platform || void 0, limit, (page - 1) * limit);
+  return rawJsonResponse({ code: 200, q: q2, page, limit, total, pages: Math.ceil(total / limit) || 1, count: rows.length, data: rows });
+}
+async function searchPageService(request, ctx) {
   return new Response(PAGE3, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
 }
 var PAGE3 = `<!doctype html>
+<html lang=zh>
+<head>
+<meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>\u641C\u7D22 \xB7 Bilibili \u89E3\u6790</title>
+<style>
+:root{
+  --bg:#11141a;--panel:#181d27;--panel2:#1e2430;--line:#2c3442;
+  --ink:#e9edf3;--muted:#8b97a8;--faint:#586273;--coral:#fb7299;--teal:#46c4ff;
+  --serif:"Songti SC","STSong","Noto Serif SC",ui-serif,Georgia,serif;
+  --sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",Segoe UI,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(1200px 600px at 50% -10%,#221f2c 0%,transparent 60%),var(--bg);color:var(--ink);font-family:var(--sans);padding:max(20px,4vh) 18px 60px;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1000px;margin:0 auto}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.32em;text-transform:uppercase;color:var(--coral);margin:0 0 8px}
+h1{font-family:var(--serif);font-weight:600;font-size:clamp(34px,9vw,60px);line-height:.95;margin:0;letter-spacing:.04em}
+.box{display:flex;gap:8px;margin:22px 0 18px}
+.box input{flex:1;background:var(--panel);border:1px solid var(--line);color:var(--ink);font-size:15px;padding:12px 15px;border-radius:10px}
+.box input:focus-visible{outline:2px solid var(--teal);outline-offset:1px}
+.box button{border:1px solid var(--coral);background:var(--coral);color:#1a0c0f;font-family:var(--mono);font-weight:700;font-size:13px;padding:0 20px;border-radius:10px;cursor:pointer}
+.bar a{font-family:var(--mono);font-size:11px;color:var(--faint);text-decoration:none;margin-right:14px}
+.bar a:hover{color:var(--teal)}
+.status{font-family:var(--mono);font-size:12px;color:var(--muted);margin:6px 2px 16px;min-height:1.3em}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px}
+.card{display:block;cursor:pointer;text-decoration:none;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.card:hover{border-color:var(--teal)}
+.thumb{position:relative;width:100%;aspect-ratio:3/4;background:#0e0d12;overflow:hidden}
+.thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.badge{position:absolute;left:8px;top:8px;font-family:var(--mono);font-size:10px;background:rgba(20,18,26,.8);color:var(--teal);padding:2px 7px;border-radius:5px}
+.hot{position:absolute;right:8px;top:8px;font-family:var(--mono);font-size:10px;background:rgba(255,93,108,.9);color:#1a0c0f;font-weight:700;padding:2px 7px;border-radius:5px}
+.datalink{position:absolute;right:8px;bottom:8px;font-size:13px;background:rgba(20,18,26,.8);padding:3px 7px;border-radius:6px;text-decoration:none}
+.datalink:hover{background:var(--teal)}
+.info{padding:10px}
+.who{font-family:var(--mono);font-size:11px;color:var(--teal);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ttl{font-size:13px;margin-top:3px;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.pager{display:flex;gap:10px;justify-content:center;margin-top:24px;font-family:var(--mono);font-size:12px;color:var(--muted)}
+.pager button{font-family:var(--mono);font-size:12px;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--ink);padding:8px 14px;border-radius:8px}
+.pager button:disabled{opacity:.35}
+.lb{position:fixed;inset:0;z-index:50;display:none;align-items:center;justify-content:center;background:rgba(8,7,11,.92);backdrop-filter:blur(6px)}
+.lb.on{display:flex}
+.lb-stage{position:relative;max-width:min(1000px,94vw);max-height:90vh;display:flex;align-items:center;justify-content:center}
+.lb-stage video,.lb-stage img{max-width:94vw;max-height:90vh;border-radius:10px;display:block;background:#000}
+.lb-close{position:fixed;top:16px;right:18px;width:40px;height:40px;border:0;border-radius:50%;background:rgba(255,255,255,.1);color:#fff;font-size:20px;cursor:pointer}
+.lb-nav{position:fixed;top:50%;transform:translateY(-50%);width:48px;height:64px;border:0;border-radius:10px;background:rgba(255,255,255,.08);color:#fff;font-size:26px;cursor:pointer}
+.lb-prev{left:14px}.lb-next{right:14px}
+.lb-idx{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);font-family:var(--mono);font-size:12px;color:#cdd6e2;background:rgba(8,7,11,.6);padding:4px 12px;border-radius:999px}
+footer{margin-top:30px;font-family:var(--mono);font-size:11px;color:var(--faint)}
+footer a{color:var(--muted)}
+</style>
+</head>
+<body>
+<main class=wrap>
+  <p class=eyebrow>BILIBILI \u641C\u7D22</p>
+  <h1>\u7AD9\u5185\u641C\u7D22</h1>
+  <div class=box><input id=q placeholder="\u641C\u6807\u9898 / UP\u4E3B / \u5206\u533A\u2026" autofocus><button id=go>\u641C\u7D22</button></div>
+  <div class=bar><a href="/discover">\u53D1\u73B0</a><a href="/">\u89E3\u6790\u53F0</a></div>
+  <p id=status class=status></p>
+  <div id=grid class=grid></div>
+  <div id=pager class=pager></div>
+  <footer>\u81EA\u6258\u7BA1\u4E8E RandallFlare \xB7 \u4EC5\u641C\u7D22\u7AD9\u5185\u5DF2\u89E3\u6790\u7684\u5185\u5BB9</footer>
+</main>
+<div id=lb class=lb><button class=lb-close id=lbClose>\xD7</button><button class="lb-nav lb-prev" id=lbPrev>\u2039</button><div class=lb-stage id=lbStage></div><button class="lb-nav lb-next" id=lbNext>\u203A</button><div class=lb-idx id=lbIdx></div></div>
+<script>
+(function(){
+  var $=function(s){return document.querySelector(s)}
+  var grid=$('#grid'),statusEl=$('#status'),pager=$('#pager'),qIn=$('#q')
+  var q='',page=1
+  function el(t,c,x){var e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e}
+  function card(row){
+    var a=el('div','card');a.addEventListener('click',function(){openModal(row)})
+    var th=el('div','thumb')
+    if(row.cover){var im=el('img');im.loading='lazy';im.src=row.cover;th.appendChild(im)}
+    th.appendChild(el('span','badge',row.type==='image'?'\u56FE\u96C6':'\u89C6\u9891'))
+    th.appendChild(el('span','hot','\u{1F525}'+(row.hits||1)))
+    var dl=el('a','datalink','\u{1F4CA}');dl.href='/work?platform='+encodeURIComponent(row.platform)+'&id='+encodeURIComponent(row.video_id);dl.addEventListener('click',function(e){e.stopPropagation()});th.appendChild(dl)
+    a.appendChild(th)
+    var info=el('div','info')
+    if(row.author_id){var wa=el('a','who',row.author||'\u672A\u77E5\u4F5C\u8005');wa.href='/author?platform='+encodeURIComponent(row.platform)+'&id='+encodeURIComponent(row.author_id);wa.style.textDecoration='none';wa.addEventListener('click',function(e){e.stopPropagation()});info.appendChild(wa)}
+    else info.appendChild(el('div','who',row.author||'\u672A\u77E5\u4F5C\u8005'))
+    info.appendChild(el('div','ttl',row.description||'(\u65E0\u6807\u9898)'));a.appendChild(info)
+    return a
+  }
+  async function run(p){
+    page=p||1;q=(qIn.value||'').trim()
+    if(!q){statusEl.textContent='\u8F93\u5165\u5173\u952E\u8BCD\u641C\u7D22';grid.innerHTML='';pager.innerHTML='';return}
+    history.replaceState(null,'','/search?q='+encodeURIComponent(q))
+    statusEl.textContent='\u641C\u7D22\u4E2D\u2026';grid.innerHTML='';pager.innerHTML=''
+    try{
+      var r=await fetch('/api/search?q='+encodeURIComponent(q)+'&page='+page+'&limit=12')
+      var jj=await r.json();var rows=jj.data||[]
+      statusEl.textContent=jj.total?('\u201C'+q+'\u201D \u5171 '+jj.total+' \u6761 \xB7 \u7B2C '+jj.page+'/'+jj.pages+' \u9875'):'\u6CA1\u641C\u5230\u201C'+q+'\u201D\uFF0C\u6362\u4E2A\u8BCD\u6216\u5148\u53BB\u89E3\u6790'
+      rows.forEach(function(row){grid.appendChild(card(row))})
+      if(jj.pages>1){var pv=el('button',null,'\u2190 \u4E0A\u4E00\u9875');pv.disabled=jj.page<=1;pv.addEventListener('click',function(){run(page-1)});var nx=el('button',null,'\u4E0B\u4E00\u9875 \u2192');nx.disabled=jj.page>=jj.pages;nx.addEventListener('click',function(){run(page+1)});pager.appendChild(pv);pager.appendChild(el('span',null,jj.page+' / '+jj.pages));pager.appendChild(nx)}
+    }catch(e){statusEl.textContent='\u641C\u7D22\u5931\u8D25\uFF1A'+e.message}
+  }
+  $('#go').addEventListener('click',function(){run(1)})
+  qIn.addEventListener('keydown',function(e){if(e.key==='Enter')run(1)})
+  // lightbox (shared shape with discover)
+  var lb=$('#lb'),lbStage=$('#lbStage'),lbIdx=$('#lbIdx'),lbPrev=$('#lbPrev'),lbNext=$('#lbNext'),slides=[],cur=0
+  function openModal(row){slides=[];if(row.play)slides=[{type:'video',url:row.play}];else if(row.extra&&row.extra.images&&row.extra.images.length)slides=row.extra.images.map(function(u){return{type:'image',url:u}});else if(row.cover)slides=[{type:'image',url:row.cover}];else return;cur=0;rs();lb.classList.add('on');document.body.style.overflow='hidden'}
+  function rs(){var s=slides[cur];lbStage.innerHTML='';if(s.type==='video'){var v=document.createElement('video');v.controls=true;v.setAttribute('playsinline','');v.autoplay=true;v.src=s.url;lbStage.appendChild(v)}else{var im=document.createElement('img');im.src=s.url;lbStage.appendChild(im)}var m=slides.length>1;lbPrev.style.display=m?'':'none';lbNext.style.display=m?'':'none';lbIdx.style.display=m?'':'none';lbIdx.textContent=(cur+1)+' / '+slides.length}
+  function go(d){if(slides.length<2)return;cur=(cur+d+slides.length)%slides.length;rs()}
+  function close(){lb.classList.remove('on');lbStage.innerHTML='';document.body.style.overflow=''}
+  lbPrev.addEventListener('click',function(e){e.stopPropagation();go(-1)});lbNext.addEventListener('click',function(e){e.stopPropagation();go(1)})
+  $('#lbClose').addEventListener('click',close);lb.addEventListener('click',function(e){if(e.target===lb)close()})
+  document.addEventListener('keydown',function(e){if(!lb.classList.contains('on'))return;if(e.key==='Escape')close();else if(e.key==='ArrowLeft')go(-1);else if(e.key==='ArrowRight')go(1)})
+  var tx=0;lb.addEventListener('touchstart',function(e){tx=e.changedTouches[0].clientX},{passive:true});lb.addEventListener('touchend',function(e){var dx=e.changedTouches[0].clientX-tx;if(Math.abs(dx)>40)go(dx<0?1:-1)},{passive:true})
+  // init from ?q=
+  var pre=new URLSearchParams(location.search).get('q');if(pre){qIn.value=pre;run(1)}
+})();
+</script>
+</body>
+</html>`;
+
+// src/service/author.js
+async function authorApiService(request, ctx) {
+  const url = new URL(request.url);
+  const platform = url.searchParams.get("platform") || "";
+  const id = url.searchParams.get("id") || "";
+  if (!platform || !id) throw new HTTPException(400, { message: "platform and id required" });
+  const limit = Math.min(48, Math.max(1, Number(url.searchParams.get("limit")) || 24));
+  const page = Math.max(1, Number(url.searchParams.get("page")) || 1);
+  const data = await getAuthor(ctx, platform, id, limit, (page - 1) * limit);
+  if (!data) throw new HTTPException(404, { message: "author not found (parse one of their works first)" });
+  return rawJsonResponse({ code: 200, page, limit, pages: Math.ceil(data.total / limit) || 1, ...data });
+}
+async function authorPageService(request, ctx) {
+  return new Response(PAGE4, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+}
+var PAGE4 = `<!doctype html>
+<html lang=zh>
+<head>
+<meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>\u4F5C\u8005\u4E3B\u9875</title>
+<style>
+:root{
+  --bg:#11141a;--panel:#181d27;--panel2:#1e2430;--line:#2c3442;
+  --ink:#e9edf3;--muted:#8b97a8;--faint:#586273;--coral:#fb7299;--teal:#46c4ff;
+  --serif:"Songti SC","STSong","Noto Serif SC",ui-serif,Georgia,serif;
+  --sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",Segoe UI,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(1100px 560px at 50% -10%,#221f2c 0%,transparent 60%),var(--bg);color:var(--ink);font-family:var(--sans);padding:max(20px,4vh) 18px 60px;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1000px;margin:0 auto}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.3em;text-transform:uppercase;color:var(--coral);margin:0}
+a.back{font-family:var(--mono);font-size:11px;color:var(--faint);text-decoration:none}
+a.back:hover{color:var(--teal)}
+.hd{display:flex;gap:18px;align-items:center;margin:16px 0 0;flex-wrap:wrap}
+.hd .av{width:84px;height:84px;border-radius:50%;object-fit:cover;background:#0e0d12;border:1px solid var(--line);flex:0 0 84px}
+.hd .nm{font-family:var(--serif);font-size:26px;margin:0}
+.hd .sub{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:6px}
+.hd .sig{font-size:13px;color:var(--muted);margin-top:8px;max-width:560px;white-space:pre-wrap}
+.trend{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;margin-top:22px}
+.trend .cap{font-family:var(--mono);font-size:11px;color:var(--muted);margin-bottom:8px}
+svg{width:100%;height:auto;display:block}
+h2{font-size:15px;margin:30px 0 12px;font-family:var(--serif);letter-spacing:.04em}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px}
+.card{display:block;cursor:pointer;text-decoration:none;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.card:hover{border-color:var(--teal)}
+.thumb{position:relative;width:100%;aspect-ratio:3/4;background:#0e0d12;overflow:hidden}
+.thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.badge{position:absolute;left:8px;top:8px;font-family:var(--mono);font-size:10px;background:rgba(20,18,26,.8);color:var(--teal);padding:2px 7px;border-radius:5px}
+.hot{position:absolute;right:8px;top:8px;font-family:var(--mono);font-size:10px;background:rgba(255,93,108,.9);color:#1a0c0f;font-weight:700;padding:2px 7px;border-radius:5px}
+.datalink{position:absolute;right:8px;bottom:8px;font-size:13px;background:rgba(20,18,26,.8);padding:3px 7px;border-radius:6px;text-decoration:none}
+.datalink:hover{background:var(--teal)}
+.info{padding:10px}
+.who{font-family:var(--mono);font-size:11px;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ttl{font-size:13px;margin-top:3px;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.pager{display:flex;gap:10px;justify-content:center;margin-top:24px;font-family:var(--mono);font-size:12px;color:var(--muted)}
+.pager button{font-family:var(--mono);font-size:12px;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--ink);padding:8px 14px;border-radius:8px}
+.pager button:disabled{opacity:.35}
+.status{font-family:var(--mono);font-size:12px;color:var(--muted);margin:20px 2px}
+.lb{position:fixed;inset:0;z-index:50;display:none;align-items:center;justify-content:center;background:rgba(8,7,11,.92);backdrop-filter:blur(6px)}
+.lb.on{display:flex}
+.lb-stage{position:relative;max-width:min(1000px,94vw);max-height:90vh;display:flex;align-items:center;justify-content:center}
+.lb-stage video,.lb-stage img{max-width:94vw;max-height:90vh;border-radius:10px;display:block;background:#000}
+.lb-close{position:fixed;top:16px;right:18px;width:40px;height:40px;border:0;border-radius:50%;background:rgba(255,255,255,.1);color:#fff;font-size:20px;cursor:pointer}
+.lb-nav{position:fixed;top:50%;transform:translateY(-50%);width:48px;height:64px;border:0;border-radius:10px;background:rgba(255,255,255,.08);color:#fff;font-size:26px;cursor:pointer}
+.lb-prev{left:14px}.lb-next{right:14px}
+.lb-idx{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);font-family:var(--mono);font-size:12px;color:#cdd6e2;background:rgba(8,7,11,.6);padding:4px 12px;border-radius:999px}
+</style>
+</head>
+<body>
+<main class=wrap>
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <p class=eyebrow>\u4F5C\u8005\u4E3B\u9875</p>
+    <a class=back href="/discover">\u2190 \u53D1\u73B0</a>
+  </div>
+  <div id=app><p class=status>\u52A0\u8F7D\u4E2D\u2026</p></div>
+</main>
+<div id=lb class=lb><button class=lb-close id=lbClose>\xD7</button><button class="lb-nav lb-prev" id=lbPrev>\u2039</button><div class=lb-stage id=lbStage></div><button class="lb-nav lb-next" id=lbNext>\u203A</button><div class=lb-idx id=lbIdx></div></div>
+<script>
+(function(){
+  var $=function(s){return document.querySelector(s)}
+  var q=new URLSearchParams(location.search)
+  var platform=q.get('platform'),id=q.get('id'),page=Math.max(1,Number(q.get('page'))||1)
+  function fmt(n){n=Number(n)||0;return n>=10000?(n/10000).toFixed(1)+'w':String(n)}
+  function el(t,c,x){var e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e}
+  function tstr(ms){if(!ms)return '\u2014';var d=new Date(ms);return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2)}
+  function followerChart(fh){
+    var vals=fh.map(function(p){return Number(p.follower)||0}),n=fh.length
+    var W=760,H=150,padL=8,padR=8,padT=12,padB=18
+    var mn=Math.min.apply(null,vals),mx=Math.max.apply(null,vals)
+    var xs=function(i){return n<2?W/2:padL+(W-padL-padR)*i/(n-1)}
+    var ys=function(v){var t=mx===mn?0.5:(v-mn)/(mx-mn);return padT+(H-padT-padB)*(1-t)}
+    var d='';vals.forEach(function(v,i){d+=(i?'L':'M')+xs(i).toFixed(1)+' '+ys(v).toFixed(1)+' '})
+    var svg='<svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio=none>'
+    svg+='<path d="'+d+'" fill=none stroke="#ff5d6c" stroke-width=2 stroke-linejoin=round/>'
+    vals.forEach(function(v,i){svg+='<circle cx='+xs(i).toFixed(1)+' cy='+ys(v).toFixed(1)+' r=2.5 fill="#ff5d6c"/>'})
+    svg+='</svg>'
+    return '<div class=cap>\u7C89\u4E1D\u8D8B\u52BF '+tstr(fh[0].ts)+' \u2192 '+tstr(fh[n-1].ts)+' \xB7 \u5F53\u524D '+fmt(vals[n-1])+'</div>'+svg
+  }
+  function card(row){
+    var a=el('div','card');a.addEventListener('click',function(){openModal(row)})
+    var th=el('div','thumb')
+    if(row.cover){var im=el('img');im.loading='lazy';im.src=row.cover;th.appendChild(im)}
+    th.appendChild(el('span','badge',row.type==='image'?'\u56FE\u96C6':'\u89C6\u9891'))
+    th.appendChild(el('span','hot','\u{1F525}'+(row.hits||1)))
+    var dl=el('a','datalink','\u{1F4CA}');dl.href='/work?platform='+encodeURIComponent(row.platform)+'&id='+encodeURIComponent(row.video_id);dl.addEventListener('click',function(e){e.stopPropagation()});th.appendChild(dl)
+    a.appendChild(th)
+    var info=el('div','info');info.appendChild(el('div','who',tstr((row.create_time||0)*1000)));info.appendChild(el('div','ttl',row.description||'(\u65E0\u6807\u9898)'));a.appendChild(info)
+    return a
+  }
+  async function load(){
+    if(!platform||!id){$('#app').innerHTML='<p class=status>\u7F3A\u5C11 platform / id</p>';return}
+    try{
+      var r=await fetch('/api/author?platform='+encodeURIComponent(platform)+'&id='+encodeURIComponent(id)+'&page='+page+'&limit=24')
+      if(r.status!==200){var j=await r.json().catch(function(){return{}});$('#app').innerHTML='<p class=status>'+(j.message||('HTTP '+r.status))+'</p>';return}
+      render(await r.json())
+    }catch(e){$('#app').innerHTML='<p class=status>\u52A0\u8F7D\u5931\u8D25\uFF1A'+e.message+'</p>'}
+  }
+  function render(d){
+    var au=d.author||{},ex=au.extra||{},works=d.works||[],fh=d.follower_history||[]
+    var app=$('#app');app.innerHTML=''
+    var hd=el('div','hd')
+    if(au.avatar){var av=el('img','av');av.src=au.avatar;hd.appendChild(av)}
+    var box=el('div')
+    box.appendChild(el('div','nm',au.name||'\u672A\u77E5\u4F5C\u8005'))
+    var sub='\u5E73\u53F0 '+platform+(ex.follower!=null?(' \xB7 \u7C89\u4E1D '+fmt(ex.follower)):'')+' \xB7 \u7AD9\u5185\u6536\u5F55 '+d.total+' \u4E2A\u4F5C\u54C1'
+    box.appendChild(el('div','sub',sub))
+    if(ex.signature)box.appendChild(el('div','sig',ex.signature))
+    hd.appendChild(box);app.appendChild(hd)
+    if(fh.length>=2){var tr=el('div','trend');tr.innerHTML=followerChart(fh);app.appendChild(tr)}
+    app.appendChild(el('h2',null,'\u4F5C\u54C1 ('+d.total+')'))
+    var grid=el('div','grid');works.forEach(function(w){grid.appendChild(card(w))});app.appendChild(grid)
+    if(d.pages>1){var pg=el('div','pager')
+      var pv=el('button',null,'\u2190 \u4E0A\u4E00\u9875');pv.disabled=page<=1;pv.addEventListener('click',function(){location.search='?platform='+encodeURIComponent(platform)+'&id='+encodeURIComponent(id)+'&page='+(page-1)})
+      var nx=el('button',null,'\u4E0B\u4E00\u9875 \u2192');nx.disabled=page>=d.pages;nx.addEventListener('click',function(){location.search='?platform='+encodeURIComponent(platform)+'&id='+encodeURIComponent(id)+'&page='+(page+1)})
+      pg.appendChild(pv);pg.appendChild(el('span',null,page+' / '+d.pages));pg.appendChild(nx);app.appendChild(pg)}
+  }
+  // lightbox
+  var lb=$('#lb'),lbStage=$('#lbStage'),lbIdx=$('#lbIdx'),lbPrev=$('#lbPrev'),lbNext=$('#lbNext'),slides=[],cur=0
+  function openModal(row){slides=[];if(row.play)slides=[{type:'video',url:row.play}];else if(row.extra&&row.extra.images&&row.extra.images.length)slides=row.extra.images.map(function(u){return{type:'image',url:u}});else if(row.cover)slides=[{type:'image',url:row.cover}];else return;cur=0;rs();lb.classList.add('on');document.body.style.overflow='hidden'}
+  function rs(){var s=slides[cur];lbStage.innerHTML='';if(s.type==='video'){var v=document.createElement('video');v.controls=true;v.setAttribute('playsinline','');v.autoplay=true;v.src=s.url;lbStage.appendChild(v)}else{var im=document.createElement('img');im.src=s.url;lbStage.appendChild(im)}var m=slides.length>1;lbPrev.style.display=m?'':'none';lbNext.style.display=m?'':'none';lbIdx.style.display=m?'':'none';lbIdx.textContent=(cur+1)+' / '+slides.length}
+  function go(dr){if(slides.length<2)return;cur=(cur+dr+slides.length)%slides.length;rs()}
+  function close(){lb.classList.remove('on');lbStage.innerHTML='';document.body.style.overflow=''}
+  lbPrev.addEventListener('click',function(e){e.stopPropagation();go(-1)});lbNext.addEventListener('click',function(e){e.stopPropagation();go(1)})
+  $('#lbClose').addEventListener('click',close);lb.addEventListener('click',function(e){if(e.target===lb)close()})
+  document.addEventListener('keydown',function(e){if(!lb.classList.contains('on'))return;if(e.key==='Escape')close();else if(e.key==='ArrowLeft')go(-1);else if(e.key==='ArrowRight')go(1)})
+  var tx=0;lb.addEventListener('touchstart',function(e){tx=e.changedTouches[0].clientX},{passive:true});lb.addEventListener('touchend',function(e){var dx=e.changedTouches[0].clientX-tx;if(Math.abs(dx)>40)go(dx<0?1:-1)},{passive:true})
+  load()
+})();
+</script>
+</body>
+</html>`;
+
+// src/service/cron.js
+var THROTTLE_MS = 50 * 1e3;
+var REFRESH_BATCH = 8;
+var GROW_BATCH = 4;
+async function cronService(request, ctx) {
+  const expr = request.headers.get("x-edge-cron-expression") || "default";
+  const last = await metaGet(ctx, `cron:last:${expr}`);
+  const now = Date.now();
+  if (last && now - last.ts < THROTTLE_MS) {
+    return json({ code: 200, skipped: "throttled", expr });
+  }
+  await metaSet(ctx, `cron:last:${expr}`, now);
+  if (!ctx.config.d1) {
+    return json({ code: 200, skipped: "no-d1", expr });
+  }
+  const run = (async () => {
+    const stale = await staleQueries(ctx, REFRESH_BATCH);
+    let refreshed = 0;
+    const errors = [];
+    for (const w of stale) {
+      try {
+        await ingestWork(ctx, request, w.platform, w.video_id, w.original_url, true);
+        await maybeFetchComments(ctx, w.platform, w.video_id);
+        refreshed++;
+      } catch (e) {
+        errors.push(`refresh ${w.video_id} ${e?.message || e}`);
+      }
+    }
+    let grown = 0;
+    try {
+      const pop = await fetchComPopular(ctx, 1);
+      const list = pop?.data?.list || [];
+      for (const v of list) {
+        if (grown >= GROW_BATCH) break;
+        const bvid = v.bvid;
+        if (!bvid) continue;
+        try {
+          await ingestWork(ctx, request, "bilibili", bvid, `https://www.bilibili.com/video/${bvid}`, false);
+          grown++;
+        } catch (e) {
+          errors.push(`grow ${bvid} ${e?.message || e}`);
+        }
+      }
+    } catch (e) {
+      errors.push(`popular ${e?.message || e}`);
+    }
+    await metaSet(ctx, `cron:stats:${expr}`, now);
+    return { refreshed, attempted: stale.length, grown, errors: errors.slice(0, 5) };
+  })();
+  if (ctx.waitUntil) {
+    ctx.waitUntil(run);
+    return json({ code: 200, expr, started: true, refreshBatch: REFRESH_BATCH, growBatch: GROW_BATCH });
+  }
+  const result = await run;
+  return json({ code: 200, expr, ...result });
+}
+function json(obj) {
+  return new Response(JSON.stringify(obj), {
+    status: 200,
+    headers: { "content-type": "application/json; charset=utf-8" }
+  });
+}
+
+// src/service/app.js
+async function appService(request, ctx) {
+  return new Response(PAGE5, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+}
+var PAGE5 = `<!doctype html>
 <html lang=zh>
 <head>
 <meta charset=utf-8>
@@ -1906,7 +2524,7 @@ footer a{color:var(--muted)}
   </div>
   <p id=status class=status>\u7B49\u5F85\u94FE\u63A5</p>
   <div id=out></div>
-  <footer>\u81EA\u6258\u7BA1\u4E8E RandallFlare \xB7 <a href="/discover">\u53D1\u73B0</a> \xB7 <a href="/admin">\u6863\u6848</a> \xB7 <a href="/docs">\u63A5\u53E3\u6587\u6863</a></footer>
+  <footer>\u81EA\u6258\u7BA1\u4E8E RandallFlare \xB7 <a href="/discover">\u53D1\u73B0</a> \xB7 <a href="/search">\u641C\u7D22</a> \xB7 <a href="/admin">\u6863\u6848</a> \xB7 <a href="/docs">\u63A5\u53E3\u6587\u6863</a></footer>
 </main>
 <script>
 (function(){
@@ -2041,6 +2659,9 @@ async function router(request, ctx) {
   if (pathname === "/favicon.ico") {
     return new Response(null, { status: 204 });
   }
+  if (pathname === "/__edge_cron" && request.method === "POST") {
+    return cronService(request, ctx);
+  }
   if (pathname === "/" && request.method === "GET") {
     return appService(request, ctx);
   }
@@ -2064,6 +2685,21 @@ async function router(request, ctx) {
   }
   if (pathname === "/api/work" && request.method === "GET") {
     return workApiService(request, ctx);
+  }
+  if (pathname === "/api/comments" && request.method === "GET") {
+    return commentsApiService(request, ctx);
+  }
+  if (pathname === "/search" && request.method === "GET") {
+    return searchPageService(request, ctx);
+  }
+  if (pathname === "/api/search" && request.method === "GET") {
+    return searchApiService(request, ctx);
+  }
+  if (pathname === "/author" && request.method === "GET") {
+    return authorPageService(request, ctx);
+  }
+  if (pathname === "/api/author" && request.method === "GET") {
+    return authorApiService(request, ctx);
   }
   if (pathname.startsWith("/api/bilibili/web/")) {
     return bilibiliWebService(pathname.slice("/api/bilibili/web/".length), request, ctx);

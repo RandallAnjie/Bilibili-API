@@ -48,6 +48,8 @@ a.back:hover{color:var(--teal)}
 .author img{width:38px;height:38px;border-radius:50%;object-fit:cover;background:#0e0d12;border:1px solid var(--line)}
 .author .nm{font-size:15px} .author .fo{font-family:var(--mono);font-size:11px;color:var(--faint)}
 .facts{font-family:var(--mono);font-size:12px;color:var(--muted);line-height:1.9}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 0}
+.chip{font-family:var(--mono);font-size:11px;color:var(--teal);border:1px solid var(--line);border-radius:999px;padding:2px 9px;text-decoration:none}
 .acts{margin-top:12px;display:flex;gap:9px;flex-wrap:wrap}
 .btn{display:inline-block;text-decoration:none;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--ink);font-family:var(--mono);font-size:12px;padding:8px 13px;border-radius:8px}
 .btn.go{border-color:var(--coral);background:var(--coral);color:#1a0c0f;font-weight:700}
@@ -64,6 +66,13 @@ h2{font-size:15px;margin:34px 0 6px;font-family:var(--serif);letter-spacing:.04e
 svg{width:100%;height:auto;display:block}
 .hint{font-family:var(--mono);font-size:12px;color:var(--faint);margin-top:8px}
 .status{font-family:var(--mono);font-size:12px;color:var(--muted);margin:20px 2px}
+.cmts{display:flex;flex-direction:column;gap:12px;margin-top:8px}
+.cmt{display:flex;gap:10px}
+.cmt img{width:32px;height:32px;border-radius:50%;object-fit:cover;background:#0e0d12;border:1px solid var(--line);flex:0 0 32px}
+.cmt .cb{min-width:0}
+.cmt .ca{font-family:var(--mono);font-size:12px;color:var(--teal)}
+.cmt .ct{font-size:14px;margin:2px 0;word-break:break-word}
+.cmt .cm{font-family:var(--mono);font-size:11px;color:var(--faint)}
 </style>
 </head>
 <body>
@@ -133,12 +142,15 @@ svg{width:100%;height:auto;display:block}
     var ab=el('div','author')
     if(au.avatar){var av=el('img');av.src=au.avatar;ab.appendChild(av)}
     var ai=el('div')
-    ai.appendChild(el('div','nm',(au.name||w.author||'未知作者')))
+    if(w.author_id){var na=el('a','nm',(au.name||w.author||'未知作者'));na.href='/author?platform='+encodeURIComponent(w.platform)+'&id='+encodeURIComponent(w.author_id);na.style.color='var(--ink)';na.style.textDecoration='none';ai.appendChild(na)}
+    else ai.appendChild(el('div','nm',(au.name||w.author||'未知作者')))
     if(aex.follower!=null)ai.appendChild(el('div','fo','粉丝 '+fmt(aex.follower)))
     ab.appendChild(ai);meta.appendChild(ab)
     var facts=el('div','facts')
     facts.innerHTML='平台 '+w.platform+' · '+(w.type==='image'?'图集':'视频')+'<br>发布 '+datestr(w.create_time)+(w.duration?(' · 时长 '+w.duration+'s'):'')+'<br>解析 '+w.hits+' 次 · 首次 '+tstr(w.created_at)
     meta.appendChild(facts)
+    if(Array.isArray(w.parts)&&w.parts.length>1)meta.appendChild(el('div','facts','分P '+w.parts.length+' 个'))
+    if(Array.isArray(w.tags)&&w.tags.length){var tg=el('div','chips');w.tags.slice(0,15).forEach(function(t){var c=el('a','chip','#'+t);c.href='/search?q='+encodeURIComponent(t);tg.appendChild(c)});meta.appendChild(tg)}
     var acts=el('div','acts')
     var go=el('a','btn go','重新解析(加一个数据点)');go.href='/?u='+encodeURIComponent(w.original_url||'');acts.appendChild(go)
     if(w.original_url){var o=el('a','btn','原链');o.href=w.original_url;o.target='_blank';o.rel='noopener';acts.appendChild(o)}
@@ -156,6 +168,28 @@ svg{width:100%;height:auto;display:block}
     if(hist.length<2){cw.innerHTML='<div class=hint>已有 '+hist.length+' 个数据点。多解析几次（或过段时间再解析）即可形成趋势曲线。</div>'}
     else cw.innerHTML=lineChart(hist)
     app.appendChild(cw)
+    // comments
+    app.appendChild(el('h2',null,'热门评论'))
+    var cm=el('div','cmts');cm.id='cmts';cm.appendChild(el('div','hint','加载中…'));app.appendChild(cm)
+    loadComments(w.platform,w.video_id)
+  }
+  async function loadComments(platform,id){
+    var box=$('#cmts');if(!box)return
+    try{
+      var r=await fetch('/api/comments?platform='+encodeURIComponent(platform)+'&id='+encodeURIComponent(id)+'&limit=30')
+      var j=await r.json();var rows=j.data||[]
+      box.innerHTML=''
+      if(!rows.length){box.appendChild(el('div','hint','暂无评论（或正在抓取，稍后刷新）'));return}
+      rows.forEach(function(c){
+        var it=el('div','cmt')
+        if(c.avatar){var im=el('img');im.src=c.avatar;im.loading='lazy';it.appendChild(im)}
+        var b=el('div','cb')
+        b.appendChild(el('div','ca',c.author||'匿名'))
+        b.appendChild(el('div','ct',c.text||''))
+        b.appendChild(el('div','cm','赞 '+fmt(c.likes)+(c.ctime?(' · '+datestr(c.ctime)):'')))
+        it.appendChild(b);box.appendChild(it)
+      })
+    }catch(e){box.innerHTML='<div class=hint>评论加载失败：'+e.message+'</div>'}
   }
   load()
 })();

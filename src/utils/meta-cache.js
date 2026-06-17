@@ -31,10 +31,14 @@ export async function fetchBiliCached (ctx, bvId, refresh = false) {
     desc: d.desc,
     pic: d.pic,
     pubdate: d.pubdate,
+    tname: d.tname || null,
     owner: d.owner,
     stat: d.stat,
     duration: d.duration,
     pages: Array.isArray(d.pages) ? d.pages.length : 1,
+    pages_list: Array.isArray(d.pages)
+      ? d.pages.map(p => ({ cid: p.cid, page: p.page, part: p.part, duration: p.duration }))
+      : [],
     dash: dash ? { video: dash.video || [], audio: dash.audio || [] } : null,
     durl: durl || null
   }

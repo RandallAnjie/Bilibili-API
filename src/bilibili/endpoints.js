@@ -6,8 +6,10 @@ export const BiliEndpoints = {
   POST_DETAIL: `${API}/x/web-interface/view`, // ?bvid=  (no wbi)
   VIDEO_PLAYURL: `${API}/x/player/wbi/playurl`, // wbi
   VIDEO_PARTS: `${API}/x/player/pagelist`, // ?bvid=
+  VIDEO_TAGS: `${API}/x/tag/archive/tags`, // ?bvid=  (UP-assigned tags)
   USER_POST: `${API}/x/space/wbi/arc/search`, // wbi
   USER_DETAIL: `${API}/x/space/wbi/acc/info`, // wbi
+  RELATION_STAT: `${API}/x/relation/stat`, // ?vmid=  (follower/following count)
   COM_POPULAR: `${API}/x/web-interface/popular`, // wbi
   VIDEO_COMMENTS: `${API}/x/v2/reply`,
   COMMENT_REPLY: `${API}/x/v2/reply/reply`,
