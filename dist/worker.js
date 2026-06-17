@@ -1504,6 +1504,18 @@ h1{font-family:var(--serif);font-weight:600;font-size:clamp(36px,9vw,64px);line-
 .pager button:hover:not(:disabled){border-color:var(--blue);color:var(--blue)}
 footer{margin-top:32px;font-family:var(--mono);font-size:11px;color:var(--faint)}
 footer a{color:var(--muted)}
+/* lightbox */
+.lb{position:fixed;inset:0;z-index:50;display:none;align-items:center;justify-content:center;background:rgba(7,9,13,.92);backdrop-filter:blur(6px)}
+.lb.on{display:flex}
+.lb-stage{position:relative;max-width:min(1100px,95vw);max-height:90vh;display:flex;align-items:center;justify-content:center}
+.lb-stage video,.lb-stage img{max-width:95vw;max-height:90vh;border-radius:10px;display:block;background:#000}
+.lb-close{position:fixed;top:16px;right:18px;width:40px;height:40px;border:0;border-radius:50%;background:rgba(255,255,255,.1);color:#fff;font-size:20px;cursor:pointer;line-height:40px}
+.lb-close:hover{background:var(--pink);color:#2a0d16}
+.lb-nav{position:fixed;top:50%;transform:translateY(-50%);width:48px;height:64px;border:0;border-radius:10px;background:rgba(255,255,255,.08);color:#fff;font-size:26px;cursor:pointer}
+.lb-nav:hover{background:rgba(255,255,255,.18)}
+.lb-prev{left:14px} .lb-next{right:14px}
+.lb-idx{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);font-family:var(--mono);font-size:12px;color:#cdd6e2;background:rgba(7,9,13,.6);padding:4px 12px;border-radius:999px}
+@media(max-width:560px){.lb-nav{width:40px;height:52px;font-size:20px}}
 </style>
 </head>
 <body>
@@ -1522,6 +1534,13 @@ footer a{color:var(--muted)}
   <div id=pager class=pager></div>
   <footer>\u81EA\u6258\u7BA1\u4E8E RandallFlare \xB7 <a href="/">\u89E3\u6790\u53F0</a> \xB7 <a href="/docs">\u63A5\u53E3</a></footer>
 </main>
+<div id=lb class=lb>
+  <button class=lb-close id=lbClose aria-label=\u5173\u95ED>\xD7</button>
+  <button class="lb-nav lb-prev" id=lbPrev aria-label=\u4E0A\u4E00\u5F20>\u2039</button>
+  <div class=lb-stage id=lbStage></div>
+  <button class="lb-nav lb-next" id=lbNext aria-label=\u4E0B\u4E00\u5F20>\u203A</button>
+  <div class=lb-idx id=lbIdx></div>
+</div>
 <script>
 (function(){
   var $=function(s){return document.querySelector(s)}
@@ -1531,8 +1550,7 @@ footer a{color:var(--muted)}
   function ago(ms){var s=Math.floor((Date.now()-ms)/1000);if(s<60)return s+'\u79D2\u524D';if(s<3600)return Math.floor(s/60)+'\u5206\u524D';if(s<86400)return Math.floor(s/3600)+'\u65F6\u524D';return Math.floor(s/86400)+'\u5929\u524D'}
   function dur(d){if(!d)return '';var m=Math.floor(d/60),s=d%60;return m+':'+(s<10?'0':'')+s}
   function card(row){
-    var href=row.play||('/?u='+encodeURIComponent(row.original_url||''))
-    var a=el('a','card');a.href=href;if(row.play){a.target='_blank';a.rel='noopener'}
+    var a=el('div','card');a.style.cursor='pointer';a.addEventListener('click',function(){openModal(row)})
     var th=el('div','thumb')
     if(row.cover){var im=el('img');im.loading='lazy';im.src=row.cover;im.alt='';th.appendChild(im)}
     th.appendChild(el('span','hot','\u{1F525}'+(row.hits||1)))
@@ -1562,6 +1580,37 @@ footer a{color:var(--muted)}
   function setSort(s){if(sort===s)return;sort=s;page=1;$('#tabRecent').classList.toggle('on',s==='recent');$('#tabHot').classList.toggle('on',s==='hot');load()}
   $('#tabRecent').addEventListener('click',function(){setSort('recent')})
   $('#tabHot').addEventListener('click',function(){setSort('hot')})
+
+  // lightbox
+  var lb=$('#lb'),lbStage=$('#lbStage'),lbIdx=$('#lbIdx'),lbPrev=$('#lbPrev'),lbNext=$('#lbNext')
+  var slides=[],cur=0
+  function openModal(row){
+    slides=[]
+    if(row.play)slides=[{type:'video',url:row.play}]
+    else if(row.extra&&row.extra.images&&row.extra.images.length)slides=row.extra.images.map(function(u){return{type:'image',url:u}})
+    else if(row.cover)slides=[{type:'image',url:row.cover}]
+    else{location.href='/?u='+encodeURIComponent(row.original_url||'');return}
+    cur=0;renderSlide();lb.classList.add('on');document.body.style.overflow='hidden'
+  }
+  function renderSlide(){
+    var s=slides[cur];lbStage.innerHTML=''
+    if(s.type==='video'){var v=document.createElement('video');v.controls=true;v.autoplay=true;v.setAttribute('playsinline','');v.src=s.url;lbStage.appendChild(v)}
+    else{var im=document.createElement('img');im.src=s.url;im.alt='';lbStage.appendChild(im)}
+    var multi=slides.length>1
+    lbPrev.style.display=multi?'':'none';lbNext.style.display=multi?'':'none'
+    lbIdx.style.display=multi?'':'none';lbIdx.textContent=(cur+1)+' / '+slides.length
+  }
+  function go(d){if(slides.length<2)return;cur=(cur+d+slides.length)%slides.length;renderSlide()}
+  function closeModal(){lb.classList.remove('on');lbStage.innerHTML='';document.body.style.overflow=''}
+  lbPrev.addEventListener('click',function(e){e.stopPropagation();go(-1)})
+  lbNext.addEventListener('click',function(e){e.stopPropagation();go(1)})
+  $('#lbClose').addEventListener('click',closeModal)
+  lb.addEventListener('click',function(e){if(e.target===lb)closeModal()})
+  document.addEventListener('keydown',function(e){if(!lb.classList.contains('on'))return;if(e.key==='Escape')closeModal();else if(e.key==='ArrowLeft')go(-1);else if(e.key==='ArrowRight')go(1)})
+  var tx=0
+  lb.addEventListener('touchstart',function(e){tx=e.changedTouches[0].clientX},{passive:true})
+  lb.addEventListener('touchend',function(e){var dx=e.changedTouches[0].clientX-tx;if(Math.abs(dx)>40)go(dx<0?1:-1)},{passive:true})
+
   load()
 })();
 </script>
