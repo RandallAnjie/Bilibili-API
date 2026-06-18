@@ -2262,7 +2262,8 @@ svg{width:100%;height:220px;display:block}
     if(hist.length<2||!keys.length)return '<div class=hint>\u6570\u636E\u6682\u65E0\u660E\u663E\u53D8\u5316\uFF08'+hist.length+' \u4E2A\u4E0D\u540C\u5FEB\u7167\uFF09\u3002\u7B49\u6570\u503C\u968F\u65F6\u95F4\u53D8\u5316\u540E\u4F1A\u51FA\u73B0\u8D8B\u52BF\u66F2\u7EBF\u3002</div>'
     var W=760,H=220,padL=8,padR=8,padT=14,padB=18,inner=H-padT-padB
     var n=hist.length
-    var xs=function(i){return n<2?W/2:padL+(W-padL-padR)*i/(n-1)}
+    var t0=hist[0].ts,tN=hist[n-1].ts,span=tN-t0
+    var xs=function(i){return n<2?W/2:(span>0?padL+(W-padL-padR)*((hist[i].ts-t0)/span):padL+(W-padL-padR)*i/(n-1))}
     var svg='<svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio=none>'
     svg+='<line x1='+padL+' y1='+(H-padB)+' x2='+(W-padR)+' y2='+(H-padB)+' stroke="#36313f" stroke-width=1 />'
     keys.forEach(function(k){

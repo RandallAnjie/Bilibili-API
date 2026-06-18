@@ -107,7 +107,8 @@ svg{width:100%;height:220px;display:block}
     if(hist.length<2||!keys.length)return '<div class=hint>数据暂无明显变化（'+hist.length+' 个不同快照）。等数值随时间变化后会出现趋势曲线。</div>'
     var W=760,H=220,padL=8,padR=8,padT=14,padB=18,inner=H-padT-padB
     var n=hist.length
-    var xs=function(i){return n<2?W/2:padL+(W-padL-padR)*i/(n-1)}
+    var t0=hist[0].ts,tN=hist[n-1].ts,span=tN-t0
+    var xs=function(i){return n<2?W/2:(span>0?padL+(W-padL-padR)*((hist[i].ts-t0)/span):padL+(W-padL-padR)*i/(n-1))}
     var svg='<svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio=none>'
     svg+='<line x1='+padL+' y1='+(H-padB)+' x2='+(W-padR)+' y2='+(H-padB)+' stroke="#36313f" stroke-width=1 />'
     keys.forEach(function(k){
