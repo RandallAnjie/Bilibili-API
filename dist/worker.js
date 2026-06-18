@@ -511,6 +511,10 @@ var BiliEndpoints = {
   // wbi
   DYNAMIC_DETAIL: `${API}/x/polymer/web-dynamic/v1/detail`,
   // ?id=  (动态/opus 图文)
+  PGC_SEASON: `${API}/pgc/view/web/season`,
+  // ?ep_id= / ?season_id=  (番剧)
+  PGC_PLAYURL: `${API}/pgc/player/web/playurl`,
+  // ?ep_id=&cid=  (番剧, 地区/会员限制)
   LIVEROOM_DETAIL: `${LIVE}/room/v1/Room/get_info`,
   LIVE_VIDEOS: `${LIVE}/room/v1/Room/playUrl`,
   LIVE_AREAS: `${LIVE}/room/v1/Area/getList`
@@ -539,6 +543,13 @@ function fetchVideoParts(ctx, bvId) {
 function fetchUserProfile(ctx, mid) {
   const q2 = wbiQuery({ mid: String(mid), platform: "web", web_location: "1550101" });
   return fetchGetJson(`${BiliEndpoints.USER_DETAIL}?${q2}`, biliHeaders(ctx));
+}
+function fetchBangumiSeason(ctx, kind, id) {
+  const q2 = kind === "ss" ? `season_id=${encodeURIComponent(id)}` : `ep_id=${encodeURIComponent(id)}`;
+  return fetchGetJson(`${BiliEndpoints.PGC_SEASON}?${q2}`, biliHeaders(ctx));
+}
+function fetchBangumiPlayurl(ctx, epId, cid, { fnval = "4048", qn = "80" } = {}) {
+  return fetchGetJson(`${BiliEndpoints.PGC_PLAYURL}?ep_id=${encodeURIComponent(epId)}&cid=${encodeURIComponent(cid)}&qn=${qn}&fnval=${fnval}&fourk=1`, biliHeaders(ctx));
 }
 function fetchDynamicDetail(ctx, dynId) {
   return fetchGetJson(`${BiliEndpoints.DYNAMIC_DETAIL}?id=${encodeURIComponent(dynId)}&features=itemOpusStyle`, biliHeaders(ctx));
@@ -632,16 +643,19 @@ async function bilibiliWebService(route, request, ctx) {
 var URL_RE = /https?:\/\/\S+/;
 var BV_RE = /(BV[0-9A-Za-z]{10})/;
 var DYN_RE = /(?:t\.bilibili\.com|m\.bilibili\.com\/dynamic|bilibili\.com\/opus)\/(\d+)/;
+var BANGUMI_RE = /bangumi\/play\/(ep|ss)(\d+)/i;
 async function resolveBiliTarget(input) {
   const url = extractValidUrl(input);
   if (!url) throw new HTTPException(400, { message: "Invalid URL (no BV id / link found)" });
   let m;
+  if (m = url.match(BANGUMI_RE)) return { kind: "bangumi", id: `${m[1].toLowerCase()}:${m[2]}` };
   if (m = url.match(BV_RE)) return { kind: "video", id: m[1] };
   if (m = url.match(DYN_RE)) return { kind: "opus", id: m[1] };
   const finalUrl = await resolveUrl(url);
+  if (m = finalUrl.match(BANGUMI_RE)) return { kind: "bangumi", id: `${m[1].toLowerCase()}:${m[2]}` };
   if (m = finalUrl.match(BV_RE)) return { kind: "video", id: m[1] };
   if (m = finalUrl.match(DYN_RE)) return { kind: "opus", id: m[1] };
-  throw new HTTPException(404, { message: `No BV / dynamic id in ${finalUrl}` });
+  throw new HTTPException(404, { message: `No BV / dynamic / bangumi id in ${finalUrl}` });
 }
 function extractValidUrl(input) {
   if (typeof input !== "string") return null;
@@ -937,6 +951,62 @@ async function fetchBiliDynamicCached(ctx, dynId, refresh = false) {
   if (data.images.length || data.text) putJson(bucket, ctx, key, data);
   return { data, cached: false };
 }
+async function fetchBiliBangumiCached(ctx, vid, refresh = false) {
+  const bucket = ctx.config.mediaR2;
+  const key = metaKey("bilibili", vid);
+  if (bucket && !refresh) {
+    const cached = await getJson(bucket, key, ctx.config.cache.metaTtl);
+    if (cached) return { data: cached, cached: true };
+  }
+  const [kind, idval] = vid.split(":");
+  const sv = await fetchBangumiSeason(ctx, kind, idval);
+  const result = sv?.result;
+  if (!result) throw new HTTPException(sv?.code === -404 ? 404 : 502, { message: `B\u7AD9\u756A\u5267\u83B7\u53D6\u5931\u8D25\uFF1A${sv?.message || "code " + sv?.code}` });
+  const eps = result.episodes || [];
+  let ep = kind === "ep" ? eps.find((e) => String(e.id) === idval || String(e.ep_id) === idval) : result.new_ep ? eps.find((e) => String(e.id) === String(result.new_ep.id)) : null;
+  if (!ep) ep = eps[0] || result.new_ep && { id: result.new_ep.id, cid: result.new_ep.cid, cover: result.new_ep.cover, long_title: result.new_ep.long_title };
+  if (!ep || !ep.cid) throw new HTTPException(404, { message: "B\u7AD9\u756A\u5267\u65E0\u53EF\u89E3\u6790\u5206\u96C6\uFF08\u53EF\u80FD\u533A\u57DF\u9650\u5236/\u4E0B\u67B6\uFF09" });
+  const epid = ep.id || ep.ep_id || idval;
+  let dash = null;
+  let durl = null;
+  let playMsg = null;
+  try {
+    const r = await fetchBangumiPlayurl(ctx, epid, ep.cid, { fnval: "4048", qn: "80" });
+    const pr = r?.result || r;
+    dash = pr?.dash || null;
+    if (r?.code && r.code !== 0) playMsg = r.message;
+  } catch {
+  }
+  try {
+    const r = await fetchBangumiPlayurl(ctx, epid, ep.cid, { fnval: "1", qn: "80" });
+    const pr = r?.result || r;
+    durl = pr?.durl || null;
+  } catch {
+  }
+  const s = result.stat || {};
+  const data = {
+    bvid: ep.bvid || result.season_id,
+    aid: ep.aid,
+    cid: ep.cid,
+    ep_id: epid,
+    title: [result.season_title || result.title, ep.long_title || ep.title || ep.share_copy].filter(Boolean).join(" "),
+    desc: result.evaluate || "",
+    pic: ep.cover || result.cover,
+    pubdate: ep.pub_time || null,
+    tname: result.season_title || "\u756A\u5267",
+    owner: { mid: result.season_id ? `ss${result.season_id}` : null, name: result.season_title || result.title, face: result.cover },
+    stat: { view: s.views, danmaku: s.danmakus, reply: s.reply, favorite: s.favorites ?? s.favorite, coin: s.coins, like: s.likes, share: s.share },
+    duration: ep.duration ? Math.round(ep.duration / 1e3) : null,
+    pages: 1,
+    pages_list: [],
+    dash: dash ? { video: dash.video || [], audio: dash.audio || [] } : null,
+    durl: durl || null,
+    is_bangumi: true,
+    play_restricted: !dash && !durl ? playMsg || "\u533A\u57DF/\u4F1A\u5458\u9650\u5236\uFF0C\u65E0\u6CD5\u53D6\u6D41" : null
+  };
+  putJson(bucket, ctx, key, data);
+  return { data, cached: false };
+}
 async function fetchBiliCached(ctx, bvId, refresh = false) {
   const bucket = ctx.config.mediaR2;
   const key = metaKey("bilibili", bvId);
@@ -997,6 +1067,10 @@ async function resolvePlatformId(url) {
 async function fetchRawById(ctx, platform, id, refresh = false) {
   if (typeof id === "string" && id.startsWith("opus:")) {
     const { data } = await fetchBiliDynamicCached(ctx, id.slice(5), refresh);
+    return { raw: data };
+  }
+  if (typeof id === "string" && (id.startsWith("ep:") || id.startsWith("ss:"))) {
+    const { data } = await fetchBiliBangumiCached(ctx, id, refresh);
     return { raw: data };
   }
   const { raw } = { raw: (await fetchBiliCached(ctx, id, refresh)).data };

@@ -3,7 +3,7 @@
 // video is DASH (separate video + audio); we also expose a combined mp4
 // (durl) for one-click playback/download.
 import { resolveBiliTarget } from '../utils/ids.js'
-import { fetchBiliCached, fetchBiliDynamicCached } from '../utils/meta-cache.js'
+import { fetchBiliCached, fetchBiliDynamicCached, fetchBiliBangumiCached } from '../utils/meta-cache.js'
 import { HTTPException } from '../utils/http-exception.js'
 
 export function detectPlatform (url) {
@@ -25,6 +25,10 @@ export async function resolvePlatformId (url) {
 export async function fetchRawById (ctx, platform, id, refresh = false) {
   if (typeof id === 'string' && id.startsWith('opus:')) {
     const { data } = await fetchBiliDynamicCached(ctx, id.slice(5), refresh)
+    return { raw: data }
+  }
+  if (typeof id === 'string' && (id.startsWith('ep:') || id.startsWith('ss:'))) {
+    const { data } = await fetchBiliBangumiCached(ctx, id, refresh)
     return { raw: data }
   }
   const { raw } = { raw: (await fetchBiliCached(ctx, id, refresh)).data }

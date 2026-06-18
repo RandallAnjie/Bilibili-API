@@ -36,6 +36,17 @@ export function fetchUserProfile (ctx, mid) {
   return fetchGetJson(`${EP.USER_DETAIL}?${q}`, biliHeaders(ctx))
 }
 
+// Bangumi (番剧) — PGC endpoints. season carries the episode list
+// (cid/aid/bvid/cover/title); playurl is region/VIP-gated.
+export function fetchBangumiSeason (ctx, kind, id) {
+  const q = kind === 'ss' ? `season_id=${encodeURIComponent(id)}` : `ep_id=${encodeURIComponent(id)}`
+  return fetchGetJson(`${EP.PGC_SEASON}?${q}`, biliHeaders(ctx))
+}
+
+export function fetchBangumiPlayurl (ctx, epId, cid, { fnval = '4048', qn = '80' } = {}) {
+  return fetchGetJson(`${EP.PGC_PLAYURL}?ep_id=${encodeURIComponent(epId)}&cid=${encodeURIComponent(cid)}&qn=${qn}&fnval=${fnval}&fourk=1`, biliHeaders(ctx))
+}
+
 export function fetchDynamicDetail (ctx, dynId) {
   return fetchGetJson(`${EP.DYNAMIC_DETAIL}?id=${encodeURIComponent(dynId)}&features=itemOpusStyle`, biliHeaders(ctx))
 }

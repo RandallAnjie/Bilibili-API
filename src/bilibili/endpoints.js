@@ -15,6 +15,8 @@ export const BiliEndpoints = {
   COMMENT_REPLY: `${API}/x/v2/reply/reply`,
   USER_DYNAMIC: `${API}/x/polymer/web-dynamic/v1/feed/space`, // wbi
   DYNAMIC_DETAIL: `${API}/x/polymer/web-dynamic/v1/detail`, // ?id=  (动态/opus 图文)
+  PGC_SEASON: `${API}/pgc/view/web/season`, // ?ep_id= / ?season_id=  (番剧)
+  PGC_PLAYURL: `${API}/pgc/player/web/playurl`, // ?ep_id=&cid=  (番剧, 地区/会员限制)
   LIVEROOM_DETAIL: `${LIVE}/room/v1/Room/get_info`,
   LIVE_VIDEOS: `${LIVE}/room/v1/Room/playUrl`,
   LIVE_AREAS: `${LIVE}/room/v1/Area/getList`
