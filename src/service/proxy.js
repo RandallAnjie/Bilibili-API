@@ -11,7 +11,9 @@ import { requireProxyAuth } from '../utils/auth.js'
 import { fetchRawById, mediaCandidates } from '../hybrid/crawler.js'
 import { serveFromR2, teeIntoCache, r2PutRetry, r2PutMultipart, mediaKey } from '../utils/r2cache.js'
 
-const BUFFER_CAP = 20 * 1024 * 1024
+// Bodies over this stream into R2 via multipart (a single PUT this big
+// 502s on the plane body cap); smaller ones buffer + single put.
+const BUFFER_CAP = 8 * 1024 * 1024
 const MIN_CACHE_BYTES = 1024
 const minSizeForKind = (kind) => (kind === 'cover' || kind === 'avatar' ? 256 : 10000)
 
@@ -69,18 +71,22 @@ export async function proxyService (request, ctx) {
   }
   if (!upstream) throw new HTTPException(502, { message: `All ${candidates.length} candidate url(s) failed for kind=${kind}` })
 
-  if (rangeHeader) {
-    if (bucket && ctx?.waitUntil && rangeStartOf(rangeHeader) === 0) {
-      ctx.waitUntil((async () => {
-        try {
-          const f = await fetch(usedUrl, { headers: reqHeaders })
-          if (!f.ok || !f.body) return
-          // Videos are large → multipart (single PUT exceeds the body cap).
-          await r2PutMultipart(bucket, key, f.body, { httpMetadata: { contentType } })
-        } catch (e) { try { console.error('[r2] warm failed', key, e?.message || e) } catch {} }
-      })())
-    }
+  // A genuine sub-range (seek, e.g. bytes=5000000-) just gets the slice;
+  // the cache is populated by full / open-ended passes, after which R2
+  // answers ranges directly. An OPEN-ended range from 0 (bytes=0-, what a
+  // <video> sends first) is treated as a full GET so we can tee it into R2
+  // DURING the transfer — reliable, unlike a background warm that outlives
+  // the post-response time budget.
+  const openFromZero = /^bytes=0-$/.test((rangeHeader || '').trim())
+  if (rangeHeader && !openFromZero) {
     return withDisposition(wrapMedia(upstream, contentType, 'upstream-range'), download, platform, id, kind, ext)
+  }
+  if (openFromZero) {
+    try { await upstream.body?.cancel() } catch {}
+    try { upstream = await fetch(usedUrl, { headers: reqHeaders }) } catch { upstream = null }
+    if (!upstream || !looksLikeMedia(upstream, kind, false)) {
+      throw new HTTPException(502, { message: `re-fetch failed for kind=${kind}` })
+    }
   }
 
   if (!bucket) {

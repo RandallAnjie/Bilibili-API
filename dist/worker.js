@@ -1536,7 +1536,7 @@ function requireAuthOrThrow(request, ctx, target) {
 }
 
 // src/service/proxy.js
-var BUFFER_CAP = 20 * 1024 * 1024;
+var BUFFER_CAP = 8 * 1024 * 1024;
 var MIN_CACHE_BYTES = 1024;
 var minSizeForKind = (kind) => kind === "cover" || kind === "avatar" ? 256 : 1e4;
 var KIND_CT = { mp4: "video/mp4", video: "video/mp4", audio: "audio/mp4", cover: "image/jpeg", avatar: "image/jpeg" };
@@ -1590,22 +1590,23 @@ async function proxyService(request, ctx) {
     ({ upstream, usedUrl } = await probe(candidates));
   }
   if (!upstream) throw new HTTPException(502, { message: `All ${candidates.length} candidate url(s) failed for kind=${kind}` });
-  if (rangeHeader) {
-    if (bucket && ctx?.waitUntil && rangeStartOf(rangeHeader) === 0) {
-      ctx.waitUntil((async () => {
-        try {
-          const f = await fetch(usedUrl, { headers: reqHeaders });
-          if (!f.ok || !f.body) return;
-          await r2PutMultipart(bucket, key, f.body, { httpMetadata: { contentType } });
-        } catch (e) {
-          try {
-            console.error("[r2] warm failed", key, e?.message || e);
-          } catch {
-          }
-        }
-      })());
-    }
+  const openFromZero = /^bytes=0-$/.test((rangeHeader || "").trim());
+  if (rangeHeader && !openFromZero) {
     return withDisposition(wrapMedia(upstream, contentType, "upstream-range"), download, platform, id, kind, ext);
+  }
+  if (openFromZero) {
+    try {
+      await upstream.body?.cancel();
+    } catch {
+    }
+    try {
+      upstream = await fetch(usedUrl, { headers: reqHeaders });
+    } catch {
+      upstream = null;
+    }
+    if (!upstream || !looksLikeMedia(upstream, kind, false)) {
+      throw new HTTPException(502, { message: `re-fetch failed for kind=${kind}` });
+    }
   }
   if (!bucket) {
     return withDisposition(wrapMedia(upstream, contentType, "upstream-plain"), download, platform, id, kind, ext);
@@ -1637,10 +1638,6 @@ function looksLikeMedia(resp, kind, isRange) {
     if (len && len < minSizeForKind(kind)) return false;
   }
   return true;
-}
-function rangeStartOf(header) {
-  const m = String(header || "").match(/bytes=(\d+)-/);
-  return m ? Number(m[1]) : 0;
 }
 function wrapMedia(upstream, contentType, source) {
   const out = new Headers();
