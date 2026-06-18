@@ -509,6 +509,8 @@ var BiliEndpoints = {
   COMMENT_REPLY: `${API}/x/v2/reply/reply`,
   USER_DYNAMIC: `${API}/x/polymer/web-dynamic/v1/feed/space`,
   // wbi
+  DYNAMIC_DETAIL: `${API}/x/polymer/web-dynamic/v1/detail`,
+  // ?id=  (动态/opus 图文)
   LIVEROOM_DETAIL: `${LIVE}/room/v1/Room/get_info`,
   LIVE_VIDEOS: `${LIVE}/room/v1/Room/playUrl`,
   LIVE_AREAS: `${LIVE}/room/v1/Area/getList`
@@ -537,6 +539,9 @@ function fetchVideoParts(ctx, bvId) {
 function fetchUserProfile(ctx, mid) {
   const q2 = wbiQuery({ mid: String(mid), platform: "web", web_location: "1550101" });
   return fetchGetJson(`${BiliEndpoints.USER_DETAIL}?${q2}`, biliHeaders(ctx));
+}
+function fetchDynamicDetail(ctx, dynId) {
+  return fetchGetJson(`${BiliEndpoints.DYNAMIC_DETAIL}?id=${encodeURIComponent(dynId)}&features=itemOpusStyle`, biliHeaders(ctx));
 }
 function fetchVideoTags(ctx, bvId) {
   return fetchGetJson(`${BiliEndpoints.VIDEO_TAGS}?bvid=${encodeURIComponent(bvId)}`, biliHeaders(ctx));
@@ -626,6 +631,18 @@ async function bilibiliWebService(route, request, ctx) {
 // src/utils/ids.js
 var URL_RE = /https?:\/\/\S+/;
 var BV_RE = /(BV[0-9A-Za-z]{10})/;
+var DYN_RE = /(?:t\.bilibili\.com|m\.bilibili\.com\/dynamic|bilibili\.com\/opus)\/(\d+)/;
+async function resolveBiliTarget(input) {
+  const url = extractValidUrl(input);
+  if (!url) throw new HTTPException(400, { message: "Invalid URL (no BV id / link found)" });
+  let m;
+  if (m = url.match(BV_RE)) return { kind: "video", id: m[1] };
+  if (m = url.match(DYN_RE)) return { kind: "opus", id: m[1] };
+  const finalUrl = await resolveUrl(url);
+  if (m = finalUrl.match(BV_RE)) return { kind: "video", id: m[1] };
+  if (m = finalUrl.match(DYN_RE)) return { kind: "opus", id: m[1] };
+  throw new HTTPException(404, { message: `No BV / dynamic id in ${finalUrl}` });
+}
 function extractValidUrl(input) {
   if (typeof input !== "string") return null;
   const m = input.match(URL_RE);
@@ -638,20 +655,6 @@ async function resolveUrl(url) {
     headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36" }
   });
   return resp.url || url;
-}
-async function getBvId(input) {
-  if (typeof input === "string") {
-    const direct = input.match(BV_RE);
-    if (direct) return direct[1];
-  }
-  const url = extractValidUrl(input);
-  if (!url) throw new HTTPException(400, { message: "Invalid URL (no BV id / link found)" });
-  const m1 = url.match(BV_RE);
-  if (m1) return m1[1];
-  const finalUrl = await resolveUrl(url);
-  const m2 = finalUrl.match(BV_RE);
-  if (m2) return m2[1];
-  throw new HTTPException(404, { message: `BV id not found in ${finalUrl}` });
 }
 
 // src/utils/r2cache.js
@@ -886,6 +889,51 @@ function putJson(bucket, ctx, key, obj) {
 }
 
 // src/utils/meta-cache.js
+function normalizeDynamic(dynId, item) {
+  const mods = item.modules || {};
+  const au = mods.module_author || {};
+  const md = mods.module_dynamic || {};
+  const stat = mods.module_stat || {};
+  const major = md.major || {};
+  let text = "";
+  let images = [];
+  if (major.opus) {
+    text = major.opus.summary?.text || "";
+    images = (major.opus.pics || []).map((p) => p.url).filter(Boolean);
+  } else if (major.draw) {
+    images = (major.draw.items || []).map((i) => i.src).filter(Boolean);
+    text = md.desc?.text || "";
+  } else if (major.archive) {
+    images = major.archive.cover ? [major.archive.cover] : [];
+    text = major.archive.title || md.desc?.text || "";
+  } else {
+    text = md.desc?.text || "";
+  }
+  return {
+    _kind: "opus",
+    dyn_id: dynId,
+    dyn_type: item.type || null,
+    text,
+    images,
+    owner: { mid: au.mid, name: au.name, face: au.face },
+    pubdate: au.pub_ts || null,
+    stat: { like: stat.like?.count ?? 0, reply: stat.comment?.count ?? 0, share: stat.forward?.count ?? 0 }
+  };
+}
+async function fetchBiliDynamicCached(ctx, dynId, refresh = false) {
+  const bucket = ctx.config.mediaR2;
+  const key = metaKey("bilibili", `opus:${dynId}`);
+  if (bucket && !refresh) {
+    const cached = await getJson(bucket, key, ctx.config.cache.metaTtl);
+    if (cached) return { data: cached, cached: true };
+  }
+  const resp = await fetchDynamicDetail(ctx, dynId);
+  const item = resp?.data?.item;
+  if (!item) throw new HTTPException(502, { message: `Bilibili dynamic returned no item (code ${resp?.code}: ${resp?.message || ""}) \u2014 bad cookie?` });
+  const data = normalizeDynamic(dynId, item);
+  if (data.images.length || data.text) putJson(bucket, ctx, key, data);
+  return { data, cached: false };
+}
 async function fetchBiliCached(ctx, bvId, refresh = false) {
   const bucket = ctx.config.mediaR2;
   const key = metaKey("bilibili", bvId);
@@ -940,13 +988,34 @@ async function resolvePlatformId(url) {
     throw new HTTPException(400, { message: "\u8FD9\u662F\u89E3\u6790\u7ED3\u679C\u94FE\u63A5\uFF0C\u8BF7\u7C98\u8D34 B \u7AD9\u539F\u59CB\u89C6\u9891\u94FE\u63A5 / \u5206\u4EAB\u53E3\u4EE4" });
   }
   if (!detectPlatform(url)) throw new HTTPException(400, { message: "Not a Bilibili URL (need bilibili.com / b23.tv / BV\u2026)" });
-  return { platform: "bilibili", id: await getBvId(url) };
+  const t = await resolveBiliTarget(url);
+  return { platform: "bilibili", id: t.kind === "opus" ? `opus:${t.id}` : t.id };
 }
 async function fetchRawById(ctx, platform, id, refresh = false) {
+  if (typeof id === "string" && id.startsWith("opus:")) {
+    const { data } = await fetchBiliDynamicCached(ctx, id.slice(5), refresh);
+    return { raw: data };
+  }
   const { raw } = { raw: (await fetchBiliCached(ctx, id, refresh)).data };
   return { raw };
 }
 function toMinimal(platform, videoId, data) {
+  if (data._kind === "opus") {
+    const imgs = data.images || [];
+    return {
+      type: "image",
+      platform: "bilibili",
+      video_id: videoId,
+      desc: data.text || "",
+      create_time: data.pubdate || null,
+      author: data.owner || null,
+      music: null,
+      statistics: data.stat || null,
+      duration: null,
+      cover_data: { cover: imgs[0] || null },
+      image_data: { no_watermark_image_list: imgs, watermark_image_list: imgs }
+    };
+  }
   const v = data.dash?.video?.[0]?.baseUrl || null;
   const a = data.dash?.audio?.[0]?.baseUrl || null;
   const mp4 = data.durl?.[0]?.url || null;
@@ -982,6 +1051,12 @@ function mediaCandidates(platform, raw, kind) {
   const push = (u) => {
     if (typeof u === "string" && u) out.push(u);
   };
+  if (raw._kind === "opus") {
+    if (kind === "cover") push(raw.images?.[0]);
+    else if (kind === "avatar") push(raw.owner?.face);
+    else if (/^image\d+$/.test(kind)) push(raw.images?.[Number(kind.slice(5))]);
+    return [...new Set(out.map((u) => u.replace(/^http:/, "https:")))];
+  }
   const pushStream = (s) => {
     if (s) {
       push(s.baseUrl || s.base_url);
@@ -1403,15 +1478,20 @@ async function rateLimitD1(db, ip, limit, windowSec) {
 }
 
 // src/utils/ingest.js
-var CT = { cover: "image/jpeg", avatar: "image/jpeg", mp4: "video/mp4", video: "video/mp4", audio: "audio/mp4" };
-function warmMedia(ctx, platform, id, raw, warmVideo) {
+function warmMedia(ctx, platform, id, raw, min, warmVideo) {
   const bucket = ctx.config.mediaR2;
   if (!bucket) return;
   const headers = { "User-Agent": ctx.config.bili.userAgent, Referer: "https://www.bilibili.com/" };
-  const kinds = warmVideo ? ["cover", "avatar", "mp4"] : ["cover", "avatar"];
+  const kinds = ["cover", "avatar"];
+  if (min.type === "image" && min.image_data) {
+    min.image_data.no_watermark_image_list.forEach((_, i) => kinds.push(`image${i}`));
+  } else if (warmVideo) {
+    kinds.push("mp4");
+  }
   for (const kind of kinds) {
     const cands = mediaCandidates(platform, raw, kind);
-    if (cands.length) warmUrl(ctx, bucket, mediaKey(platform, id, kind), cands[0], headers, CT[kind] || "application/octet-stream");
+    const ct = kind === "mp4" ? "video/mp4" : "image/jpeg";
+    if (cands.length) warmUrl(ctx, bucket, mediaKey(platform, id, kind), cands[0], headers, ct);
   }
 }
 async function fetchFollower(ctx, mid) {
@@ -1444,7 +1524,7 @@ async function ingestWork(ctx, request, platform, id, target, refresh = false, o
   await logQuery(ctx, {
     platform,
     video_id: id,
-    type: "video",
+    type: min.type,
     author: o.name || null,
     authorInfo: o.mid ? {
       id: String(o.mid),
@@ -1468,11 +1548,14 @@ async function ingestWork(ctx, request, platform, id, target, refresh = false, o
     description: min.desc || null,
     original_url: target,
     cover: proxyLink(request, ctx, platform, id, "cover"),
-    play: proxyLink(request, ctx, platform, id, "mp4"),
+    play: min.type === "video" ? proxyLink(request, ctx, platform, id, "mp4") : null,
     duration: raw.duration || null,
-    extra: { stats: min.statistics || null }
+    extra: {
+      stats: min.statistics || null,
+      images: min.type === "image" && min.image_data ? min.image_data.no_watermark_image_list.map((_, i) => proxyLink(request, ctx, platform, id, `image${i}`)) : void 0
+    }
   });
-  warmMedia(ctx, platform, id, raw, opts.warmVideo !== false);
+  warmMedia(ctx, platform, id, raw, min, opts.warmVideo !== false);
   return { raw, min };
 }
 
@@ -1581,7 +1664,8 @@ function requireAuthOrThrow(request, ctx, target) {
 // src/service/proxy.js
 var BUFFER_CAP = 8 * 1024 * 1024;
 var MIN_CACHE_BYTES = 1024;
-var minSizeForKind = (kind) => kind === "cover" || kind === "avatar" ? 256 : 1e4;
+var isImageKind = (kind) => /^image\d+$/.test(kind);
+var minSizeForKind = (kind) => kind === "cover" || kind === "avatar" || isImageKind(kind) ? 256 : 1e4;
 var KIND_CT = { mp4: "video/mp4", video: "video/mp4", audio: "audio/mp4", cover: "image/jpeg", avatar: "image/jpeg" };
 var KIND_EXT = { mp4: "mp4", video: "m4s", audio: "m4s", cover: "jpeg", avatar: "jpeg" };
 async function proxyService(request, ctx) {
@@ -1591,14 +1675,14 @@ async function proxyService(request, ctx) {
   const kind = url.searchParams.get("kind") || "mp4";
   if (platform !== "bilibili") throw new HTTPException(400, { message: "platform must be bilibili" });
   if (!id) throw new HTTPException(400, { message: "Missing query param: id" });
-  if (!KIND_CT[kind]) throw new HTTPException(400, { message: `Unknown kind: ${kind}` });
+  if (!KIND_CT[kind] && !isImageKind(kind)) throw new HTTPException(400, { message: `Unknown kind: ${kind}` });
   requireProxyAuth(request, ctx, platform, id);
   const refresh = ["1", "true", "yes"].includes(String(url.searchParams.get("refresh")).toLowerCase());
   const download = ["1", "true", "yes"].includes(String(url.searchParams.get("download")).toLowerCase());
   const bucket = ctx.config.mediaR2;
   const key = mediaKey(platform, id, kind);
-  const contentType = KIND_CT[kind];
-  const ext = KIND_EXT[kind];
+  const contentType = KIND_CT[kind] || "image/jpeg";
+  const ext = KIND_EXT[kind] || "jpeg";
   if (bucket && !refresh) {
     const hit = await serveFromR2(bucket, request, key, void 0, minSizeForKind(kind));
     if (hit) return withDisposition(hit, download, platform, id, kind, ext);

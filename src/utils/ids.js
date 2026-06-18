@@ -4,6 +4,27 @@ import { HTTPException } from './http-exception.js'
 
 const URL_RE = /https?:\/\/\S+/
 const BV_RE = /(BV[0-9A-Za-z]{10})/
+// 动态 / opus 图文：t.bilibili.com/<id> · bilibili.com/opus/<id> ·
+// m.bilibili.com/dynamic/<id>. The id is a long numeric string.
+const DYN_RE = /(?:t\.bilibili\.com|m\.bilibili\.com\/dynamic|bilibili\.com\/opus)\/(\d+)/
+
+export function isDynamicUrl (url) {
+  return typeof url === 'string' && DYN_RE.test(url)
+}
+
+// Resolve any bilibili link to { kind:'video'|'opus', id }. Handles BV
+// links, dynamic/opus links, and b23.tv short links (resolved once).
+export async function resolveBiliTarget (input) {
+  const url = extractValidUrl(input)
+  if (!url) throw new HTTPException(400, { message: 'Invalid URL (no BV id / link found)' })
+  let m
+  if ((m = url.match(BV_RE))) return { kind: 'video', id: m[1] }
+  if ((m = url.match(DYN_RE))) return { kind: 'opus', id: m[1] }
+  const finalUrl = await resolveUrl(url)
+  if ((m = finalUrl.match(BV_RE))) return { kind: 'video', id: m[1] }
+  if ((m = finalUrl.match(DYN_RE))) return { kind: 'opus', id: m[1] }
+  throw new HTTPException(404, { message: `No BV / dynamic id in ${finalUrl}` })
+}
 
 export function extractValidUrl (input) {
   if (typeof input !== 'string') return null

@@ -8,19 +8,23 @@ import { logQuery } from './db.js'
 import { warmUrl, mediaKey } from './r2cache.js'
 import * as bili from '../bilibili/crawler.js'
 
-const CT = { cover: 'image/jpeg', avatar: 'image/jpeg', mp4: 'video/mp4', video: 'video/mp4', audio: 'audio/mp4' }
-
 // Proactively warm a parsed work's media into R2 so discover/search/work
 // resources are served from cache, not the source CDN. Best-effort +
 // deduped; pass warmVideo=false (cron) to skip the heavy video download.
-function warmMedia (ctx, platform, id, raw, warmVideo) {
+function warmMedia (ctx, platform, id, raw, min, warmVideo) {
   const bucket = ctx.config.mediaR2
   if (!bucket) return
   const headers = { 'User-Agent': ctx.config.bili.userAgent, Referer: 'https://www.bilibili.com/' }
-  const kinds = warmVideo ? ['cover', 'avatar', 'mp4'] : ['cover', 'avatar']
+  const kinds = ['cover', 'avatar']
+  if (min.type === 'image' && min.image_data) {
+    min.image_data.no_watermark_image_list.forEach((_, i) => kinds.push(`image${i}`))
+  } else if (warmVideo) {
+    kinds.push('mp4')
+  }
   for (const kind of kinds) {
     const cands = mediaCandidates(platform, raw, kind)
-    if (cands.length) warmUrl(ctx, bucket, mediaKey(platform, id, kind), cands[0], headers, CT[kind] || 'application/octet-stream')
+    const ct = (kind === 'mp4') ? 'video/mp4' : 'image/jpeg'
+    if (cands.length) warmUrl(ctx, bucket, mediaKey(platform, id, kind), cands[0], headers, ct)
   }
 }
 
@@ -57,7 +61,7 @@ export async function ingestWork (ctx, request, platform, id, target, refresh = 
   await logQuery(ctx, {
     platform,
     video_id: id,
-    type: 'video',
+    type: min.type,
     author: o.name || null,
     authorInfo: o.mid
       ? {
@@ -78,11 +82,16 @@ export async function ingestWork (ctx, request, platform, id, target, refresh = 
     description: min.desc || null,
     original_url: target,
     cover: proxyLink(request, ctx, platform, id, 'cover'),
-    play: proxyLink(request, ctx, platform, id, 'mp4'),
+    play: min.type === 'video' ? proxyLink(request, ctx, platform, id, 'mp4') : null,
     duration: raw.duration || null,
-    extra: { stats: min.statistics || null }
+    extra: {
+      stats: min.statistics || null,
+      images: min.type === 'image' && min.image_data
+        ? min.image_data.no_watermark_image_list.map((_, i) => proxyLink(request, ctx, platform, id, `image${i}`))
+        : undefined
+    }
   })
   // Proactively cache the work's media into R2 (best-effort, background).
-  warmMedia(ctx, platform, id, raw, opts.warmVideo !== false)
+  warmMedia(ctx, platform, id, raw, min, opts.warmVideo !== false)
   return { raw, min }
 }

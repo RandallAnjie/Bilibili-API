@@ -15,7 +15,8 @@ import { serveFromR2, teeIntoCache, r2PutRetry, r2PutMultipart, warmUrl, mediaKe
 // 502s on the plane body cap); smaller ones buffer + single put.
 const BUFFER_CAP = 8 * 1024 * 1024
 const MIN_CACHE_BYTES = 1024
-const minSizeForKind = (kind) => (kind === 'cover' || kind === 'avatar' ? 256 : 10000)
+const isImageKind = (kind) => /^image\d+$/.test(kind)
+const minSizeForKind = (kind) => (kind === 'cover' || kind === 'avatar' || isImageKind(kind) ? 256 : 10000)
 
 const KIND_CT = { mp4: 'video/mp4', video: 'video/mp4', audio: 'audio/mp4', cover: 'image/jpeg', avatar: 'image/jpeg' }
 const KIND_EXT = { mp4: 'mp4', video: 'm4s', audio: 'm4s', cover: 'jpeg', avatar: 'jpeg' }
@@ -27,15 +28,15 @@ export async function proxyService (request, ctx) {
   const kind = url.searchParams.get('kind') || 'mp4'
   if (platform !== 'bilibili') throw new HTTPException(400, { message: 'platform must be bilibili' })
   if (!id) throw new HTTPException(400, { message: 'Missing query param: id' })
-  if (!KIND_CT[kind]) throw new HTTPException(400, { message: `Unknown kind: ${kind}` })
+  if (!KIND_CT[kind] && !isImageKind(kind)) throw new HTTPException(400, { message: `Unknown kind: ${kind}` })
   requireProxyAuth(request, ctx, platform, id)
 
   const refresh = ['1', 'true', 'yes'].includes(String(url.searchParams.get('refresh')).toLowerCase())
   const download = ['1', 'true', 'yes'].includes(String(url.searchParams.get('download')).toLowerCase())
   const bucket = ctx.config.mediaR2
   const key = mediaKey(platform, id, kind)
-  const contentType = KIND_CT[kind]
-  const ext = KIND_EXT[kind]
+  const contentType = KIND_CT[kind] || 'image/jpeg'
+  const ext = KIND_EXT[kind] || 'jpeg'
 
   if (bucket && !refresh) {
     const hit = await serveFromR2(bucket, request, key, undefined, minSizeForKind(kind))

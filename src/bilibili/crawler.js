@@ -36,6 +36,10 @@ export function fetchUserProfile (ctx, mid) {
   return fetchGetJson(`${EP.USER_DETAIL}?${q}`, biliHeaders(ctx))
 }
 
+export function fetchDynamicDetail (ctx, dynId) {
+  return fetchGetJson(`${EP.DYNAMIC_DETAIL}?id=${encodeURIComponent(dynId)}&features=itemOpusStyle`, biliHeaders(ctx))
+}
+
 export function fetchVideoTags (ctx, bvId) {
   return fetchGetJson(`${EP.VIDEO_TAGS}?bvid=${encodeURIComponent(bvId)}`, biliHeaders(ctx))
 }
