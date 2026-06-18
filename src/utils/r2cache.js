@@ -188,6 +188,26 @@ export async function r2PutMultipart (bucket, key, stream, opts = {}, partSize =
   }
 }
 
+// Warm a resolved media URL into R2 (full body, multipart) in the
+// background. Deduped via KV (warm:<key>) so concurrent seeks / re-parses
+// don't each re-download, and skipped if the object is already cached.
+// Best-effort — never throws, never blocks the response.
+export async function warmUrl (ctx, bucket, key, url, headers, contentType, { lockTtl = 300 } = {}) {
+  if (!bucket || !url) return
+  try { const h = await bucket.head(key); if (h && (Number(h.size) || 0) > 256) return } catch {}
+  const kv = ctx?.config?.kv
+  const lock = `warm:${key}`
+  try { if (kv) { if (await kv.get(lock)) return; await kv.put(lock, '1', { expirationTtl: lockTtl }) } } catch {}
+  const job = (async () => {
+    try {
+      const f = await fetch(url, { headers })
+      if (!f.ok || !f.body) return
+      await r2PutMultipart(bucket, key, f.body, { httpMetadata: { contentType } })
+    } catch (e) { try { console.error('[r2] warm failed', key, e?.message || e) } catch {} }
+  })()
+  if (ctx?.waitUntil) ctx.waitUntil(job); else await job
+}
+
 // Put with retry. The RandallFlare plane R2 PUT 502s intermittently, so
 // a single attempt often fails silently. `makeBody` is called fresh on
 // each attempt (streams can only be consumed once). Returns true on

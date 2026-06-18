@@ -9,7 +9,7 @@
 import { HTTPException } from '../utils/http-exception.js'
 import { requireProxyAuth } from '../utils/auth.js'
 import { fetchRawById, mediaCandidates } from '../hybrid/crawler.js'
-import { serveFromR2, teeIntoCache, r2PutRetry, r2PutMultipart, mediaKey } from '../utils/r2cache.js'
+import { serveFromR2, teeIntoCache, r2PutRetry, r2PutMultipart, warmUrl, mediaKey } from '../utils/r2cache.js'
 
 // Bodies over this stream into R2 via multipart (a single PUT this big
 // 502s on the plane body cap); smaller ones buffer + single put.
@@ -79,6 +79,9 @@ export async function proxyService (request, ctx) {
   // the post-response time budget.
   const openFromZero = /^bytes=0-$/.test((rangeHeader || '').trim())
   if (rangeHeader && !openFromZero) {
+    // Genuine sub-range (seek). Serve the slice now, and warm the WHOLE
+    // file into R2 in the background (deduped) so later reads hit cache.
+    if (bucket) warmUrl(ctx, bucket, key, usedUrl, reqHeaders, contentType)
     return withDisposition(wrapMedia(upstream, contentType, 'upstream-range'), download, platform, id, kind, ext)
   }
   if (openFromZero) {

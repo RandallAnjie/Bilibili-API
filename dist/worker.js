@@ -824,6 +824,37 @@ async function r2PutMultipart(bucket, key, stream, opts = {}, partSize = PART_SI
     return false;
   }
 }
+async function warmUrl(ctx, bucket, key, url, headers, contentType, { lockTtl = 300 } = {}) {
+  if (!bucket || !url) return;
+  try {
+    const h = await bucket.head(key);
+    if (h && (Number(h.size) || 0) > 256) return;
+  } catch {
+  }
+  const kv = ctx?.config?.kv;
+  const lock = `warm:${key}`;
+  try {
+    if (kv) {
+      if (await kv.get(lock)) return;
+      await kv.put(lock, "1", { expirationTtl: lockTtl });
+    }
+  } catch {
+  }
+  const job = (async () => {
+    try {
+      const f = await fetch(url, { headers });
+      if (!f.ok || !f.body) return;
+      await r2PutMultipart(bucket, key, f.body, { httpMetadata: { contentType } });
+    } catch (e) {
+      try {
+        console.error("[r2] warm failed", key, e?.message || e);
+      } catch {
+      }
+    }
+  })();
+  if (ctx?.waitUntil) ctx.waitUntil(job);
+  else await job;
+}
 async function r2PutRetry(bucket, key, makeBody, opts, tries = 4) {
   for (let i = 0; i < tries; i++) {
     try {
@@ -1372,6 +1403,17 @@ async function rateLimitD1(db, ip, limit, windowSec) {
 }
 
 // src/utils/ingest.js
+var CT = { cover: "image/jpeg", avatar: "image/jpeg", mp4: "video/mp4", video: "video/mp4", audio: "audio/mp4" };
+function warmMedia(ctx, platform, id, raw, warmVideo) {
+  const bucket = ctx.config.mediaR2;
+  if (!bucket) return;
+  const headers = { "User-Agent": ctx.config.bili.userAgent, Referer: "https://www.bilibili.com/" };
+  const kinds = warmVideo ? ["cover", "avatar", "mp4"] : ["cover", "avatar"];
+  for (const kind of kinds) {
+    const cands = mediaCandidates(platform, raw, kind);
+    if (cands.length) warmUrl(ctx, bucket, mediaKey(platform, id, kind), cands[0], headers, CT[kind] || "application/octet-stream");
+  }
+}
 async function fetchFollower(ctx, mid) {
   try {
     const r = await fetchUserStat(ctx, mid);
@@ -1390,7 +1432,7 @@ async function fetchTags(ctx, bvId, tname) {
   }
   return tname ? [tname] : null;
 }
-async function ingestWork(ctx, request, platform, id, target, refresh = false) {
+async function ingestWork(ctx, request, platform, id, target, refresh = false, opts = {}) {
   const { raw } = await fetchRawById(ctx, platform, id, refresh);
   const min = toMinimal(platform, id, raw);
   const o = min.author || {};
@@ -1430,6 +1472,7 @@ async function ingestWork(ctx, request, platform, id, target, refresh = false) {
     duration: raw.duration || null,
     extra: { stats: min.statistics || null }
   });
+  warmMedia(ctx, platform, id, raw, opts.warmVideo !== false);
   return { raw, min };
 }
 
@@ -1592,6 +1635,7 @@ async function proxyService(request, ctx) {
   if (!upstream) throw new HTTPException(502, { message: `All ${candidates.length} candidate url(s) failed for kind=${kind}` });
   const openFromZero = /^bytes=0-$/.test((rangeHeader || "").trim());
   if (rangeHeader && !openFromZero) {
+    if (bucket) warmUrl(ctx, bucket, key, usedUrl, reqHeaders, contentType);
     return withDisposition(wrapMedia(upstream, contentType, "upstream-range"), download, platform, id, kind, ext);
   }
   if (openFromZero) {
@@ -2479,7 +2523,7 @@ async function cronService(request, ctx) {
     const errors = [];
     for (const w of stale) {
       try {
-        await ingestWork(ctx, request, w.platform, w.video_id, w.original_url, true);
+        await ingestWork(ctx, request, w.platform, w.video_id, w.original_url, true, { warmVideo: false });
         await maybeFetchComments(ctx, w.platform, w.video_id);
         refreshed++;
       } catch (e) {
@@ -2495,7 +2539,7 @@ async function cronService(request, ctx) {
         const bvid = v.bvid;
         if (!bvid) continue;
         try {
-          await ingestWork(ctx, request, "bilibili", bvid, `https://www.bilibili.com/video/${bvid}`, false);
+          await ingestWork(ctx, request, "bilibili", bvid, `https://www.bilibili.com/video/${bvid}`, false, { warmVideo: false });
           grown++;
         } catch (e) {
           errors.push(`grow ${bvid} ${e?.message || e}`);

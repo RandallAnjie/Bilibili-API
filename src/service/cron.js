@@ -39,7 +39,7 @@ export async function cronService (request, ctx) {
     const errors = []
     for (const w of stale) {
       try {
-        await ingestWork(ctx, request, w.platform, w.video_id, w.original_url, true)
+        await ingestWork(ctx, request, w.platform, w.video_id, w.original_url, true, { warmVideo: false })
         await maybeFetchComments(ctx, w.platform, w.video_id)
         refreshed++
       } catch (e) {
@@ -57,7 +57,7 @@ export async function cronService (request, ctx) {
         const bvid = v.bvid
         if (!bvid) continue
         try {
-          await ingestWork(ctx, request, 'bilibili', bvid, `https://www.bilibili.com/video/${bvid}`, false)
+          await ingestWork(ctx, request, 'bilibili', bvid, `https://www.bilibili.com/video/${bvid}`, false, { warmVideo: false })
           grown++
         } catch (e) {
           errors.push(`grow ${bvid} ${e?.message || e}`)
