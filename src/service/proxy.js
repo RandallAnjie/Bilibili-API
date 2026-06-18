@@ -40,20 +40,32 @@ export async function proxyService (request, ctx) {
     if (hit) return withDisposition(hit, download, platform, id, kind, ext)
   }
 
-  const { raw } = await fetchRawById(ctx, platform, id, refresh)
-  const candidates = mediaCandidates(platform, raw, kind)
-  if (!candidates.length) throw new HTTPException(404, { message: `No media url for kind=${kind}` })
-
   const reqHeaders = { 'User-Agent': ctx.config.bili.userAgent, Referer: 'https://www.bilibili.com/' }
   const rangeHeader = request.headers.get('range')
 
-  let upstream = null
-  let usedUrl = null
-  for (const u of candidates) {
-    let r
-    try { r = await fetch(u, { headers: rangeHeader ? { ...reqHeaders, range: rangeHeader } : reqHeaders }) } catch { continue }
-    if (looksLikeMedia(r, kind, !!rangeHeader)) { upstream = r; usedUrl = u; break }
-    try { await r.body?.cancel() } catch {}
+  const probe = async (cands) => {
+    for (const u of cands) {
+      let r
+      try { r = await fetch(u, { headers: rangeHeader ? { ...reqHeaders, range: rangeHeader } : reqHeaders }) } catch { continue }
+      if (looksLikeMedia(r, kind, !!rangeHeader)) return { upstream: r, usedUrl: u }
+      try { await r.body?.cancel() } catch {}
+    }
+    return { upstream: null, usedUrl: null }
+  }
+
+  let { raw } = await fetchRawById(ctx, platform, id, refresh)
+  let candidates = mediaCandidates(platform, raw, kind)
+  if (!candidates.length && refresh) throw new HTTPException(404, { message: `No media url for kind=${kind}` })
+  let { upstream, usedUrl } = candidates.length ? await probe(candidates) : { upstream: null, usedUrl: null }
+
+  // Bilibili's signed CDN urls (esp. bilivideo durl/dash) expire. If every
+  // cached candidate failed and we hadn't already forced a refresh,
+  // re-resolve fresh links once and retry before giving up.
+  if (!upstream && !refresh) {
+    ;({ raw } = await fetchRawById(ctx, platform, id, true))
+    candidates = mediaCandidates(platform, raw, kind)
+    if (!candidates.length) throw new HTTPException(404, { message: `No media url for kind=${kind}` })
+    ;({ upstream, usedUrl } = await probe(candidates))
   }
   if (!upstream) throw new HTTPException(502, { message: `All ${candidates.length} candidate url(s) failed for kind=${kind}` })
 
