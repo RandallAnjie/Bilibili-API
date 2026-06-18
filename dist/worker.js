@@ -732,7 +732,7 @@ function teeIntoCache(bucket, ctx, key, upstreamResponse, contentType) {
   } catch {
     return upstreamResponse;
   }
-  const put = bucket.put(key, r2Branch, { httpMetadata: { contentType: finalType } }).catch((e) => {
+  const put = total != null && total > PART_SIZE ? r2PutMultipart(bucket, key, r2Branch, { httpMetadata: { contentType: finalType } }) : bucket.put(key, r2Branch, { httpMetadata: { contentType: finalType } }).catch((e) => {
     try {
       console.error("[r2] put failed", key, e?.message || e);
     } catch {
@@ -765,6 +765,63 @@ async function getJson(bucket, key, ttlSeconds) {
     return JSON.parse(text);
   } catch {
     return null;
+  }
+}
+var PART_SIZE = 8 * 1024 * 1024;
+async function r2PutMultipart(bucket, key, stream, opts = {}, partSize = PART_SIZE) {
+  if (!bucket || !stream) return false;
+  if (typeof bucket.createMultipartUpload !== "function") {
+    return r2PutRetry(bucket, key, () => stream, opts, 1);
+  }
+  let upload;
+  try {
+    upload = await bucket.createMultipartUpload(key, opts);
+  } catch (e) {
+    try {
+      console.error("[r2] multipart create failed", key, e?.message || e);
+    } catch {
+    }
+    return false;
+  }
+  const reader = stream.getReader();
+  const parts = [];
+  let partNumber = 1;
+  let buf = new Uint8Array(0);
+  const concat = (a, b) => {
+    const o = new Uint8Array(a.length + b.length);
+    o.set(a, 0);
+    o.set(b, a.length);
+    return o;
+  };
+  const flush = async (chunk) => {
+    parts.push(await upload.uploadPart(partNumber, chunk));
+    partNumber++;
+  };
+  try {
+    for (; ; ) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value && value.length) {
+        buf = buf.length ? concat(buf, value) : value;
+        while (buf.length >= partSize) {
+          await flush(buf.subarray(0, partSize));
+          buf = buf.subarray(partSize);
+        }
+      }
+    }
+    if (buf.length > 0 || parts.length === 0) await flush(buf);
+    await upload.complete(parts);
+    return true;
+  } catch (e) {
+    try {
+      await upload.abort();
+    } catch {
+    }
+    try {
+      console.error("[r2] multipart upload failed", key, e?.message || e);
+    } catch {
+    }
+    return false;
   }
 }
 async function r2PutRetry(bucket, key, makeBody, opts, tries = 4) {
@@ -1535,11 +1592,18 @@ async function proxyService(request, ctx) {
   if (!upstream) throw new HTTPException(502, { message: `All ${candidates.length} candidate url(s) failed for kind=${kind}` });
   if (rangeHeader) {
     if (bucket && ctx?.waitUntil && rangeStartOf(rangeHeader) === 0) {
-      ctx.waitUntil(r2PutRetry(bucket, key, async () => {
-        const f = await fetch(usedUrl, { headers: reqHeaders });
-        if (!f.ok || !f.body) throw new Error("warm fetch not ok");
-        return f.body;
-      }, { httpMetadata: { contentType } }, 1));
+      ctx.waitUntil((async () => {
+        try {
+          const f = await fetch(usedUrl, { headers: reqHeaders });
+          if (!f.ok || !f.body) return;
+          await r2PutMultipart(bucket, key, f.body, { httpMetadata: { contentType } });
+        } catch (e) {
+          try {
+            console.error("[r2] warm failed", key, e?.message || e);
+          } catch {
+          }
+        }
+      })());
     }
     return withDisposition(wrapMedia(upstream, contentType, "upstream-range"), download, platform, id, kind, ext);
   }

@@ -85,8 +85,12 @@ export function teeIntoCache (bucket, ctx, key, upstreamResponse, contentType) {
   let userBranch, r2Branch
   try { [userBranch, r2Branch] = upstreamResponse.body.tee() } catch { return upstreamResponse }
 
-  const put = bucket.put(key, r2Branch, { httpMetadata: { contentType: finalType } })
-    .catch((e) => { try { console.error('[r2] put failed', key, e?.message || e) } catch {} })
+  // Large bodies exceed the single-PUT body cap → multipart. Small ones
+  // (or unknown length) use a plain put.
+  const put = (total != null && total > PART_SIZE)
+    ? r2PutMultipart(bucket, key, r2Branch, { httpMetadata: { contentType: finalType } })
+    : bucket.put(key, r2Branch, { httpMetadata: { contentType: finalType } })
+      .catch((e) => { try { console.error('[r2] put failed', key, e?.message || e) } catch {} })
   if (ctx?.waitUntil) ctx.waitUntil(put)
 
   const out = new Headers()
@@ -137,6 +141,51 @@ export async function getJson (bucket, key, ttlSeconds) {
     const text = obj.body ? await new Response(obj.body).text() : await obj.text()
     return JSON.parse(text)
   } catch { return null }
+}
+
+// Multipart upload for LARGE bodies. A single PUT of a big video exceeds
+// the plane's request body cap (Next proxyClientMaxBodySize), so it 502s
+// and the video never caches. Multipart sends the stream as ~8 MiB parts
+// (each well under the cap); the plane assembles + forwards on complete.
+// Falls back to a single put when the binding lacks multipart. Best-effort:
+// returns true/false, never throws.
+const PART_SIZE = 8 * 1024 * 1024
+
+export async function r2PutMultipart (bucket, key, stream, opts = {}, partSize = PART_SIZE) {
+  if (!bucket || !stream) return false
+  if (typeof bucket.createMultipartUpload !== 'function') {
+    return r2PutRetry(bucket, key, () => stream, opts, 1)
+  }
+  let upload
+  try { upload = await bucket.createMultipartUpload(key, opts) } catch (e) {
+    try { console.error('[r2] multipart create failed', key, e?.message || e) } catch {}
+    return false
+  }
+  const reader = stream.getReader()
+  const parts = []
+  let partNumber = 1
+  let buf = new Uint8Array(0)
+  const concat = (a, b) => { const o = new Uint8Array(a.length + b.length); o.set(a, 0); o.set(b, a.length); return o }
+  const flush = async (chunk) => { parts.push(await upload.uploadPart(partNumber, chunk)); partNumber++ }
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value && value.length) {
+        buf = buf.length ? concat(buf, value) : value
+        while (buf.length >= partSize) { await flush(buf.subarray(0, partSize)); buf = buf.subarray(partSize) }
+      }
+    }
+    // Final (short) part — always upload the remainder, and ensure at
+    // least one part exists for an empty stream guard.
+    if (buf.length > 0 || parts.length === 0) await flush(buf)
+    await upload.complete(parts)
+    return true
+  } catch (e) {
+    try { await upload.abort() } catch {}
+    try { console.error('[r2] multipart upload failed', key, e?.message || e) } catch {}
+    return false
+  }
 }
 
 // Put with retry. The RandallFlare plane R2 PUT 502s intermittently, so
