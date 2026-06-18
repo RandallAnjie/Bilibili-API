@@ -50,6 +50,13 @@ export function rewriteMinimalToProxy (minimal, request, ctx, expSec) {
       audio_url: minimal.video_data.audio_url ? L('audio') : null
     }
   }
+  if (minimal.image_data) {
+    // Dynamics (图文) — anti-leech CDN, must go through /proxy.
+    minimal.image_data = {
+      no_watermark_image_list: (minimal.image_data.no_watermark_image_list || []).map((_, i) => L(`image${i}`)),
+      watermark_image_list: (minimal.image_data.watermark_image_list || []).map((_, i) => L(`image${i}`))
+    }
+  }
   if (minimal.cover_data) {
     minimal.cover_data = { ...minimal.cover_data, cover: minimal.cover_data.cover ? L('cover') : null }
   }
