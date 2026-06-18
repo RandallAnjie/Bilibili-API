@@ -225,6 +225,7 @@ function sha1Bytes(input) {
   return out;
 }
 var toHex = (bytes) => bytes.map((b) => b.toString(16).padStart(2, "0")).join("");
+var sha1Hex = (input) => toHex(sha1Bytes(input));
 function hmacSha1Hex(secret, message) {
   const enc = new TextEncoder();
   let key = Array.from(enc.encode(secret));
@@ -922,6 +923,11 @@ function proxyBase(request, ctx) {
   const proto = request.headers.get("x-forwarded-proto") || "https";
   const host = request.headers.get("x-forwarded-host") || u.host;
   return `${proto}://${host}${ctx.config.http.prefix}`;
+}
+function imgProxyLink(request, ctx, srcUrl) {
+  if (!srcUrl) return null;
+  const params = new URLSearchParams({ u: srcUrl, auth: sign(`img${srcUrl}`, ctx.config.auth.token) });
+  return `${proxyBase(request, ctx)}/img?${params.toString()}`;
 }
 function proxyLink(request, ctx, platform, id, kind, expSec) {
   const secret = ctx.config.auth.token;
@@ -2102,7 +2108,8 @@ async function commentsApiService(request, ctx) {
       ({ rows, total } = await getComments(ctx, platform, id, limit, 0));
     }
   }
-  return rawJsonResponse({ code: 200, platform, id, page, limit, total, count: rows.length, data: rows });
+  const data = rows.map((r) => ({ ...r, avatar: r.avatar ? imgProxyLink(request, ctx, r.avatar) : null }));
+  return rawJsonResponse({ code: 200, platform, id, page, limit, total, count: data.length, data });
 }
 
 // src/service/search.js
@@ -2453,6 +2460,64 @@ function json(obj) {
   });
 }
 
+// src/service/img.js
+var UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
+var ALLOW = ["hdslb.com", "douyinpic.com", "pstatp.com", "byteimg.com", "ibyteimg.com", "bytecdn", "bytedance", "douyincdn", "bdxiguavod", "tiktokcdn", "ttwstatic"];
+var MIN_BYTES = 256;
+async function imgService(request, ctx) {
+  const url = new URL(request.url);
+  const u = url.searchParams.get("u") || "";
+  const auth = url.searchParams.get("auth") || "";
+  const token = url.searchParams.get("token") || "";
+  const secret = ctx.config.auth.token;
+  if (!u) throw new HTTPException(400, { message: "Missing query param: u" });
+  if (token !== secret && auth !== sign(`img${u}`, secret)) {
+    throw new HTTPException(401, { message: "img: bad auth" });
+  }
+  let host;
+  try {
+    host = new URL(u).hostname;
+  } catch {
+    throw new HTTPException(400, { message: "bad url" });
+  }
+  if (!ALLOW.some((h) => host.includes(h))) throw new HTTPException(403, { message: `host not allowed: ${host}` });
+  const bucket = ctx.config.mediaR2;
+  const key = `img/${sha1Hex(u)}`;
+  if (bucket) {
+    const hit = await serveFromR2(bucket, request, key, void 0, MIN_BYTES);
+    if (hit) return hit;
+  }
+  const referer = host.includes("hdslb") ? "https://www.bilibili.com/" : host.includes("tiktokcdn") || host.includes("ttwstatic") ? "https://www.tiktok.com/" : "https://www.douyin.com/";
+  let upstream;
+  try {
+    upstream = await fetch(u, { headers: { "User-Agent": UA, Referer: referer } });
+  } catch (e) {
+    throw new HTTPException(502, { message: `img fetch failed: ${e?.message || e}` });
+  }
+  const ct = (upstream.headers.get("content-type") || "").toLowerCase();
+  if (!upstream.ok || !upstream.body || !ct.startsWith("image")) {
+    try {
+      await upstream.body?.cancel();
+    } catch {
+    }
+    throw new HTTPException(502, { message: `img upstream not an image (${upstream.status})` });
+  }
+  const contentType = upstream.headers.get("content-type") || "image/jpeg";
+  const buf = await upstream.arrayBuffer();
+  if (buf.byteLength >= MIN_BYTES && bucket && ctx?.waitUntil) {
+    ctx.waitUntil(r2PutRetry(bucket, key, () => new Response(buf).body, { httpMetadata: { contentType } }, 2));
+  }
+  return new Response(buf, {
+    status: 200,
+    headers: {
+      "content-type": contentType,
+      "content-length": String(buf.byteLength),
+      "cache-control": "public, max-age=86400",
+      "x-cache-source": "upstream-buffer"
+    }
+  });
+}
+
 // src/service/app.js
 async function appService(request, ctx) {
   return new Response(PAGE5, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
@@ -2719,6 +2784,9 @@ async function router(request, ctx) {
   }
   if (pathname === "/proxy") {
     return proxyService(request, ctx);
+  }
+  if (pathname === "/img") {
+    return imgService(request, ctx);
   }
   throw new HTTPException(404, { message: `No route for ${pathname}` });
 }

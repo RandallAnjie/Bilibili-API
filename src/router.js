@@ -18,6 +18,7 @@ import { commentsApiService } from './service/comments.js'
 import { searchPageService, searchApiService } from './service/search.js'
 import { authorPageService, authorApiService } from './service/author.js'
 import { cronService } from './service/cron.js'
+import { imgService } from './service/img.js'
 import appService from './service/app.js'
 import docsService from './service/docs.js'
 import { HTTPException } from './utils/http-exception.js'
@@ -88,6 +89,9 @@ export async function router (request, ctx) {
   }
   if (pathname === '/proxy') {
     return proxyService(request, ctx)
+  }
+  if (pathname === '/img') {
+    return imgService(request, ctx)
   }
 
   throw new HTTPException(404, { message: `No route for ${pathname}` })

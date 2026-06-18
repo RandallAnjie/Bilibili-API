@@ -12,6 +12,16 @@ export function proxyBase (request, ctx) {
   return `${proto}://${host}${ctx.config.http.prefix}`
 }
 
+// Build a cached /img link for an arbitrary external image URL (comment
+// avatars etc. that aren't tied to a parsed work's id/kind). The HMAC
+// over "img{url}" means only links we mint are fetchable — not an open
+// image proxy.
+export function imgProxyLink (request, ctx, srcUrl) {
+  if (!srcUrl) return null
+  const params = new URLSearchParams({ u: srcUrl, auth: sign(`img${srcUrl}`, ctx.config.auth.token) })
+  return `${proxyBase(request, ctx)}/img?${params.toString()}`
+}
+
 // Build a /proxy link. When expSec is given the link is TEMPORARY: an
 // exp=<unix-sec> is appended and the HMAC covers it, so guests get a
 // link that stops working after the TTL and can't be tampered with.

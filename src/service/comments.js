@@ -6,6 +6,7 @@ import { rawJsonResponse } from '../utils/respond.js'
 import { getComments, rateLimitHit } from '../utils/db.js'
 import { maybeFetchComments } from '../utils/comments.js'
 import { getClientIp } from '../utils/auth.js'
+import { imgProxyLink } from '../utils/proxy-link.js'
 
 export async function commentsApiService (request, ctx) {
   const url = new URL(request.url)
@@ -24,5 +25,8 @@ export async function commentsApiService (request, ctx) {
       ;({ rows, total } = await getComments(ctx, platform, id, limit, 0))
     }
   }
-  return rawJsonResponse({ code: 200, platform, id, page, limit, total, count: rows.length, data: rows })
+  // Route avatars through the cached /img proxy (R2) so every resource the
+  // UI renders is served from our cache, not the source CDN.
+  const data = rows.map(r => ({ ...r, avatar: r.avatar ? imgProxyLink(request, ctx, r.avatar) : null }))
+  return rawJsonResponse({ code: 200, platform, id, page, limit, total, count: data.length, data })
 }
