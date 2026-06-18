@@ -97,16 +97,21 @@ svg{width:100%;height:220px;display:block}
   function datestr(sec){if(!sec)return '—';return tstr(sec*1000).slice(0,10)}
 
   function lineChart(history){
-    // series with at least one non-zero value
-    var keys=SERIES.filter(function(k){return history.some(function(h){return Number(h.stats&&h.stats[k])>0})})
-    if(!keys.length)return '<div class=hint>暂无可用数据</div>'
+    var allKeys=SERIES.filter(function(k){return history.some(function(h){return Number(h.stats&&h.stats[k])>0})})
+    if(!allKeys.length)return '<div class=hint>暂无可用数据</div>'
+    // collapse consecutive snapshots with no change (drop duplicate/flat runs)
+    var hist=[]
+    history.forEach(function(h){var p=hist[hist.length-1];if(!p||allKeys.some(function(k){return Number(h.stats&&h.stats[k])!==Number(p.stats&&p.stats[k])}))hist.push(h)})
+    // keep only metrics that actually move
+    var keys=allKeys.filter(function(k){var vs=hist.map(function(h){return Number(h.stats&&h.stats[k])||0});return Math.min.apply(null,vs)!==Math.max.apply(null,vs)})
+    if(hist.length<2||!keys.length)return '<div class=hint>数据暂无明显变化（'+hist.length+' 个不同快照）。等数值随时间变化后会出现趋势曲线。</div>'
     var W=760,H=220,padL=8,padR=8,padT=14,padB=18,inner=H-padT-padB
-    var n=history.length
+    var n=hist.length
     var xs=function(i){return n<2?W/2:padL+(W-padL-padR)*i/(n-1)}
     var svg='<svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio=none>'
     svg+='<line x1='+padL+' y1='+(H-padB)+' x2='+(W-padR)+' y2='+(H-padB)+' stroke="#36313f" stroke-width=1 />'
     keys.forEach(function(k){
-      var vals=history.map(function(h){return Number(h.stats&&h.stats[k])||0})
+      var vals=hist.map(function(h){return Number(h.stats&&h.stats[k])||0})
       var mn=Math.min.apply(null,vals),mx=Math.max.apply(null,vals)
       var ys=function(v){var t=mx===mn?0.5:(v-mn)/(mx-mn);return padT+inner*(1-t)}
       var d=''
@@ -115,8 +120,8 @@ svg{width:100%;height:220px;display:block}
       vals.forEach(function(v,i){svg+='<circle cx='+xs(i).toFixed(1)+' cy='+ys(v).toFixed(1)+' r=2.5 fill="'+COLORS[k]+'" />'})
     })
     svg+='</svg>'
-    var legend='<div class=legend>'+keys.map(function(k){var last=history[history.length-1].stats[k];return '<span><i style="background:'+COLORS[k]+'"></i>'+LABELS[k]+' '+fmt(last)+'</span>'}).join('')+'</div>'
-    var axis='<div class=hint>'+tstr(history[0].ts)+' → '+tstr(history[n-1].ts)+' · '+n+' 个数据点（每条线按各自范围缩放）</div>'
+    var legend='<div class=legend>'+keys.map(function(k){return '<span><i style="background:'+COLORS[k]+'"></i>'+LABELS[k]+' '+fmt(hist[n-1].stats[k])+'</span>'}).join('')+'</div>'
+    var axis='<div class=hint>'+tstr(hist[0].ts)+' → '+tstr(hist[n-1].ts)+' · '+n+' 个有变化的数据点（每条线按各自范围缩放）</div>'
     return legend+svg+axis
   }
 
