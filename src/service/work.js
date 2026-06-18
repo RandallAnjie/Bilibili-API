@@ -99,9 +99,9 @@ svg{width:100%;height:220px;display:block}
   function lineChart(history){
     var allKeys=SERIES.filter(function(k){return history.some(function(h){return Number(h.stats&&h.stats[k])>0})})
     if(!allKeys.length)return '<div class=hint>暂无可用数据</div>'
-    // collapse consecutive snapshots with no change (drop duplicate/flat runs)
-    var hist=[]
-    history.forEach(function(h){var p=hist[hist.length-1];if(!p||allKeys.some(function(k){return Number(h.stats&&h.stats[k])!==Number(p.stats&&p.stats[k])}))hist.push(h)})
+    // merge all snapshots within the same hour into one point (latest wins)
+    var hist=[],lastB=null
+    history.forEach(function(h){var b=Math.floor(h.ts/3600000);if(b===lastB)hist[hist.length-1]=h;else{hist.push(h);lastB=b}})
     // keep only metrics that actually move
     var keys=allKeys.filter(function(k){var vs=hist.map(function(h){return Number(h.stats&&h.stats[k])||0});return Math.min.apply(null,vs)!==Math.max.apply(null,vs)})
     if(hist.length<2||!keys.length)return '<div class=hint>数据暂无明显变化（'+hist.length+' 个不同快照）。等数值随时间变化后会出现趋势曲线。</div>'

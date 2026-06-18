@@ -2254,9 +2254,9 @@ svg{width:100%;height:220px;display:block}
   function lineChart(history){
     var allKeys=SERIES.filter(function(k){return history.some(function(h){return Number(h.stats&&h.stats[k])>0})})
     if(!allKeys.length)return '<div class=hint>\u6682\u65E0\u53EF\u7528\u6570\u636E</div>'
-    // collapse consecutive snapshots with no change (drop duplicate/flat runs)
-    var hist=[]
-    history.forEach(function(h){var p=hist[hist.length-1];if(!p||allKeys.some(function(k){return Number(h.stats&&h.stats[k])!==Number(p.stats&&p.stats[k])}))hist.push(h)})
+    // merge all snapshots within the same hour into one point (latest wins)
+    var hist=[],lastB=null
+    history.forEach(function(h){var b=Math.floor(h.ts/3600000);if(b===lastB)hist[hist.length-1]=h;else{hist.push(h);lastB=b}})
     // keep only metrics that actually move
     var keys=allKeys.filter(function(k){var vs=hist.map(function(h){return Number(h.stats&&h.stats[k])||0});return Math.min.apply(null,vs)!==Math.max.apply(null,vs)})
     if(hist.length<2||!keys.length)return '<div class=hint>\u6570\u636E\u6682\u65E0\u660E\u663E\u53D8\u5316\uFF08'+hist.length+' \u4E2A\u4E0D\u540C\u5FEB\u7167\uFF09\u3002\u7B49\u6570\u503C\u968F\u65F6\u95F4\u53D8\u5316\u540E\u4F1A\u51FA\u73B0\u8D8B\u52BF\u66F2\u7EBF\u3002</div>'
