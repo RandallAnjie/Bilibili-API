@@ -182,7 +182,7 @@ svg{width:100%;height:auto;display:block}
       if(!rows.length){box.appendChild(el('div','hint','暂无评论（或正在抓取，稍后刷新）'));return}
       rows.forEach(function(c){
         var it=el('div','cmt')
-        if(c.avatar){var im=el('img');im.src=c.avatar;im.loading='lazy';it.appendChild(im)}
+        if(c.avatar){var im=el('img');im.referrerPolicy='no-referrer';im.src=c.avatar;im.loading='lazy';it.appendChild(im)}
         var b=el('div','cb')
         b.appendChild(el('div','ca',c.author||'匿名'))
         b.appendChild(el('div','ct',c.text||''))

@@ -2065,7 +2065,7 @@ svg{width:100%;height:auto;display:block}
       if(!rows.length){box.appendChild(el('div','hint','\u6682\u65E0\u8BC4\u8BBA\uFF08\u6216\u6B63\u5728\u6293\u53D6\uFF0C\u7A0D\u540E\u5237\u65B0\uFF09'));return}
       rows.forEach(function(c){
         var it=el('div','cmt')
-        if(c.avatar){var im=el('img');im.src=c.avatar;im.loading='lazy';it.appendChild(im)}
+        if(c.avatar){var im=el('img');im.referrerPolicy='no-referrer';im.src=c.avatar;im.loading='lazy';it.appendChild(im)}
         var b=el('div','cb')
         b.appendChild(el('div','ca',c.author||'\u533F\u540D'))
         b.appendChild(el('div','ct',c.text||''))
