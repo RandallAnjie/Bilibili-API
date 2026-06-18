@@ -2155,7 +2155,7 @@ h2{font-size:15px;margin:34px 0 6px;font-family:var(--serif);letter-spacing:.04e
 .legend{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;font-family:var(--mono);font-size:11px}
 .legend span{display:flex;align-items:center;gap:6px;color:var(--muted)}
 .legend i{width:10px;height:10px;border-radius:2px;display:inline-block}
-svg{width:100%;height:auto;display:block}
+svg{width:100%;height:auto;display:block;aspect-ratio:760/240}
 .hint{font-family:var(--mono);font-size:12px;color:var(--faint);margin-top:8px}
 .status{font-family:var(--mono);font-size:12px;color:var(--muted);margin:20px 2px}
 .cmts{display:flex;flex-direction:column;gap:12px;margin-top:8px}
@@ -2483,7 +2483,7 @@ a.back:hover{color:var(--teal)}
 .hd .sig{font-size:13px;color:var(--muted);margin-top:8px;max-width:560px;white-space:pre-wrap}
 .trend{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;margin-top:22px}
 .trend .cap{font-family:var(--mono);font-size:11px;color:var(--muted);margin-bottom:8px}
-svg{width:100%;height:auto;display:block}
+svg{width:100%;height:auto;display:block;aspect-ratio:760/150}
 h2{font-size:15px;margin:30px 0 12px;font-family:var(--serif);letter-spacing:.04em}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px}
 .card{display:block;cursor:pointer;text-decoration:none;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}

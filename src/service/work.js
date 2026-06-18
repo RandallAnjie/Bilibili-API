@@ -63,7 +63,7 @@ h2{font-size:15px;margin:34px 0 6px;font-family:var(--serif);letter-spacing:.04e
 .legend{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;font-family:var(--mono);font-size:11px}
 .legend span{display:flex;align-items:center;gap:6px;color:var(--muted)}
 .legend i{width:10px;height:10px;border-radius:2px;display:inline-block}
-svg{width:100%;height:auto;display:block}
+svg{width:100%;height:auto;display:block;aspect-ratio:760/240}
 .hint{font-family:var(--mono);font-size:12px;color:var(--faint);margin-top:8px}
 .status{font-family:var(--mono);font-size:12px;color:var(--muted);margin:20px 2px}
 .cmts{display:flex;flex-direction:column;gap:12px;margin-top:8px}
