@@ -109,16 +109,16 @@ svg{width:100%;height:300px;display:block}
     var svg='<svg viewBox="0 0 '+W+' '+H+'" width="100%" height="'+H+'" preserveAspectRatio=none>'
     var T=4
     for(var ti=0;ti<T;ti++){var f=ti/(T-1),gx=padL+(W-padL-padR)*f
-      svg+='<line x1='+gx.toFixed(1)+' y1='+padT+' x2='+gx.toFixed(1)+' y2='+(H-padB)+' stroke="#262230" stroke-width=1/>'
+      svg+='<line x1='+gx.toFixed(1)+' y1='+padT+' x2='+gx.toFixed(1)+' y2='+(H-padB)+' stroke="#262230" stroke-width=1 />'
       svg+='<text x='+gx.toFixed(1)+' y='+(H-padB+20)+' fill="#7a7488" font-size=13 text-anchor=middle>'+tlab(t0+span*f)+'</text>'}
-    svg+='<line x1='+padL+' y1='+(H-padB)+' x2='+(W-padR)+' y2='+(H-padB)+' stroke="#3a3446" stroke-width=1/>'
+    svg+='<line x1='+padL+' y1='+(H-padB)+' x2='+(W-padR)+' y2='+(H-padB)+' stroke="#3a3446" stroke-width=1 />'
     keys.forEach(function(k){
       var vals=history.map(function(h){return Number(h.stats&&h.stats[k])||0})
       var mn=Math.min.apply(null,vals),mx=Math.max.apply(null,vals)
       var yAt=function(v){var t=mx===mn?0.5:(v-mn)/(mx-mn);return padT+inner*(1-t)}
       var d=''
       history.forEach(function(h,i){d+=(i?'L':'M')+xAt(h,i).toFixed(1)+' '+yAt(vals[i]).toFixed(1)+' '})
-      svg+='<path d="'+d+'" fill=none stroke="'+COLORS[k]+'" stroke-width=2.5 stroke-linejoin=round stroke-linecap=round/>'
+      svg+='<path d="'+d+'" fill=none stroke="'+COLORS[k]+'" stroke-width=2.5 stroke-linejoin=round stroke-linecap=round />'
       history.forEach(function(h,i){svg+='<circle cx='+xAt(h,i).toFixed(1)+' cy='+yAt(vals[i]).toFixed(1)+' r=3 fill="'+COLORS[k]+'"/>'})
     })
     svg+='</svg>'

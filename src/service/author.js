@@ -100,7 +100,7 @@ h2{font-size:15px;margin:30px 0 12px;font-family:var(--serif);letter-spacing:.04
     var ys=function(v){var t=mx===mn?0.5:(v-mn)/(mx-mn);return padT+(H-padT-padB)*(1-t)}
     var d='';vals.forEach(function(v,i){d+=(i?'L':'M')+xs(i).toFixed(1)+' '+ys(v).toFixed(1)+' '})
     var svg='<svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio=none>'
-    svg+='<path d="'+d+'" fill=none stroke="#ff5d6c" stroke-width=2 stroke-linejoin=round/>'
+    svg+='<path d="'+d+'" fill=none stroke="#ff5d6c" stroke-width=2 stroke-linejoin=round />'
     vals.forEach(function(v,i){svg+='<circle cx='+xs(i).toFixed(1)+' cy='+ys(v).toFixed(1)+' r=2.5 fill="#ff5d6c"/>'})
     svg+='</svg>'
     return '<div class=cap>粉丝趋势 '+tstr(fh[0].ts)+' → '+tstr(fh[n-1].ts)+' · 当前 '+fmt(vals[n-1])+'</div>'+svg
