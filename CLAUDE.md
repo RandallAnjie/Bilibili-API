@@ -79,6 +79,13 @@ Same shape as Douyin-API (see its CLAUDE.md). Public: `/discover`,
 - Comments: oid is the **view's authoritative `aid`** (from the cached
   record) — `bv2av` does NOT round-trip the new large-aid format, so never
   use it for comment oids.
+- **Dynamics / opus (图文)**: `t.bilibili.com/<id>` · `bilibili.com/opus/<id>`
+  · `m.bilibili.com/dynamic/<id>` parse as **type=image** works, carried as
+  `id="opus:<dynId>"` through the same parse/proxy/cache/discover pipeline.
+  `resolveBiliTarget` (ids.js) picks video-vs-opus; `fetchBiliDynamicCached`
+  (meta-cache) normalizes `module_dynamic.major.{opus|draw|archive}` →
+  `{_kind:'opus', text, images[], owner, stat}`. opus images use the
+  `imageN` proxy kind. Deleted/hidden dynamics → clean 404 (code≠0).
 
 ### Cron (`POST /__edge_cron`)
 
