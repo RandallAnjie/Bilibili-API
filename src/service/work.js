@@ -63,7 +63,7 @@ h2{font-size:15px;margin:34px 0 6px;font-family:var(--serif);letter-spacing:.04e
 .legend{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;font-family:var(--mono);font-size:11px}
 .legend span{display:flex;align-items:center;gap:6px;color:var(--muted)}
 .legend i{width:10px;height:10px;border-radius:2px;display:inline-block}
-svg{width:100%;height:300px;display:block}
+svg{width:100%;height:220px;display:block}
 .hint{font-family:var(--mono);font-size:12px;color:var(--faint);margin-top:8px}
 .status{font-family:var(--mono);font-size:12px;color:var(--muted);margin:20px 2px}
 .cmts{display:flex;flex-direction:column;gap:12px;margin-top:8px}
@@ -100,30 +100,23 @@ svg{width:100%;height:300px;display:block}
     // series with at least one non-zero value
     var keys=SERIES.filter(function(k){return history.some(function(h){return Number(h.stats&&h.stats[k])>0})})
     if(!keys.length)return '<div class=hint>暂无可用数据</div>'
-    var W=800,H=300,padL=12,padR=12,padT=16,padB=36,inner=H-padT-padB
+    var W=760,H=220,padL=8,padR=8,padT=14,padB=18,inner=H-padT-padB
     var n=history.length
-    var t0=history[0].ts,tN=history[n-1].ts,span=tN-t0
-    function xAt(h,i){if(n<2)return W/2;if(span>0)return padL+(W-padL-padR)*((h.ts-t0)/span);return padL+(W-padL-padR)*i/(n-1)}
-    function p2(x){return ('0'+x).slice(-2)}
-    function tlab(ms){var d=new Date(ms);return span>2*86400000?((d.getMonth()+1)+'-'+p2(d.getDate())):(p2(d.getHours())+':'+p2(d.getMinutes()))}
-    var svg='<svg viewBox="0 0 '+W+' '+H+'" width="100%" height="'+H+'" preserveAspectRatio=none>'
-    var T=4
-    for(var ti=0;ti<T;ti++){var f=ti/(T-1),gx=padL+(W-padL-padR)*f
-      svg+='<line x1='+gx.toFixed(1)+' y1='+padT+' x2='+gx.toFixed(1)+' y2='+(H-padB)+' stroke="#262230" stroke-width=1 />'
-      svg+='<text x='+gx.toFixed(1)+' y='+(H-padB+20)+' fill="#7a7488" font-size=13 text-anchor=middle>'+tlab(t0+span*f)+'</text>'}
-    svg+='<line x1='+padL+' y1='+(H-padB)+' x2='+(W-padR)+' y2='+(H-padB)+' stroke="#3a3446" stroke-width=1 />'
+    var xs=function(i){return n<2?W/2:padL+(W-padL-padR)*i/(n-1)}
+    var svg='<svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio=none>'
+    svg+='<line x1='+padL+' y1='+(H-padB)+' x2='+(W-padR)+' y2='+(H-padB)+' stroke="#36313f" stroke-width=1 />'
     keys.forEach(function(k){
       var vals=history.map(function(h){return Number(h.stats&&h.stats[k])||0})
       var mn=Math.min.apply(null,vals),mx=Math.max.apply(null,vals)
-      var yAt=function(v){var t=mx===mn?0.5:(v-mn)/(mx-mn);return padT+inner*(1-t)}
+      var ys=function(v){var t=mx===mn?0.5:(v-mn)/(mx-mn);return padT+inner*(1-t)}
       var d=''
-      history.forEach(function(h,i){d+=(i?'L':'M')+xAt(h,i).toFixed(1)+' '+yAt(vals[i]).toFixed(1)+' '})
-      svg+='<path d="'+d+'" fill=none stroke="'+COLORS[k]+'" stroke-width=2.5 stroke-linejoin=round stroke-linecap=round />'
-      history.forEach(function(h,i){svg+='<circle cx='+xAt(h,i).toFixed(1)+' cy='+yAt(vals[i]).toFixed(1)+' r=3 fill="'+COLORS[k]+'"/>'})
+      vals.forEach(function(v,i){d+=(i?'L':'M')+xs(i).toFixed(1)+' '+ys(v).toFixed(1)+' '})
+      svg+='<path d="'+d+'" fill=none stroke="'+COLORS[k]+'" stroke-width=2 stroke-linejoin=round stroke-linecap=round />'
+      vals.forEach(function(v,i){svg+='<circle cx='+xs(i).toFixed(1)+' cy='+ys(v).toFixed(1)+' r=2.5 fill="'+COLORS[k]+'" />'})
     })
     svg+='</svg>'
     var legend='<div class=legend>'+keys.map(function(k){var last=history[history.length-1].stats[k];return '<span><i style="background:'+COLORS[k]+'"></i>'+LABELS[k]+' '+fmt(last)+'</span>'}).join('')+'</div>'
-    var axis='<div class=hint>'+tstr(t0)+' → '+tstr(tN)+' · '+n+' 个数据点 · 横轴=时间，每条线按各自数值范围缩放（不同单位）</div>'
+    var axis='<div class=hint>'+tstr(history[0].ts)+' → '+tstr(history[n-1].ts)+' · '+n+' 个数据点（每条线按各自范围缩放）</div>'
     return legend+svg+axis
   }
 
