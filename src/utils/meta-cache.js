@@ -49,7 +49,12 @@ export async function fetchBiliDynamicCached (ctx, dynId, refresh = false) {
   }
   const resp = await bili.fetchDynamicDetail(ctx, dynId)
   const item = resp?.data?.item
-  if (!item) throw new HTTPException(502, { message: `Bilibili dynamic returned no item (code ${resp?.code}: ${resp?.message || ''}) — bad cookie?` })
+  if (!item) {
+    // A non-zero code is an upstream verdict (deleted / hidden / private),
+    // not our problem — surface it cleanly as 404 rather than "bad cookie".
+    if (resp?.code) throw new HTTPException(404, { message: `B站动态无法获取：${resp.message || 'code ' + resp.code}` })
+    throw new HTTPException(502, { message: 'Bilibili dynamic returned no item — bad cookie?' })
+  }
   const data = normalizeDynamic(dynId, item)
   if (data.images.length || data.text) putJson(bucket, ctx, key, data)
   return { data, cached: false }

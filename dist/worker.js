@@ -929,7 +929,10 @@ async function fetchBiliDynamicCached(ctx, dynId, refresh = false) {
   }
   const resp = await fetchDynamicDetail(ctx, dynId);
   const item = resp?.data?.item;
-  if (!item) throw new HTTPException(502, { message: `Bilibili dynamic returned no item (code ${resp?.code}: ${resp?.message || ""}) \u2014 bad cookie?` });
+  if (!item) {
+    if (resp?.code) throw new HTTPException(404, { message: `B\u7AD9\u52A8\u6001\u65E0\u6CD5\u83B7\u53D6\uFF1A${resp.message || "code " + resp.code}` });
+    throw new HTTPException(502, { message: "Bilibili dynamic returned no item \u2014 bad cookie?" });
+  }
   const data = normalizeDynamic(dynId, item);
   if (data.images.length || data.text) putJson(bucket, ctx, key, data);
   return { data, cached: false };
