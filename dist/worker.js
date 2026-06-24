@@ -3084,7 +3084,7 @@ footer a{color:var(--muted)}
   </div>
   <p id=status class=status>\u7B49\u5F85\u94FE\u63A5</p>
   <div id=out></div>
-  <footer>\u81EA\u6258\u7BA1\u4E8E RandallFlare \xB7 <a href="/discover">\u53D1\u73B0</a> \xB7 <a href="/search">\u641C\u7D22</a> \xB7 <a href="/admin">\u6863\u6848</a> \xB7 <a href="/docs">\u63A5\u53E3\u6587\u6863</a></footer>
+  <footer>\u81EA\u6258\u7BA1\u4E8E RandallFlare \xB7 <a href="/hot">\u6392\u884C\u699C</a> \xB7 <a href="/discover">\u53D1\u73B0</a> \xB7 <a href="/search">\u641C\u7D22</a> \xB7 <a href="/admin">\u6863\u6848</a> \xB7 <a href="/docs">\u63A5\u53E3\u6587\u6863</a></footer>
 </main>
 <script>
 (function(){
