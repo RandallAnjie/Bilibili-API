@@ -1484,14 +1484,23 @@ async function storeComments(ctx, platform, videoId, comments) {
     return 0;
   }
 }
+var CMT_COLS = "comment_id, parent_id, author, author_id, avatar, text, likes, ctime";
 async function getComments(ctx, platform, videoId, limit = 20, offset = 0) {
   const db = ctx.config.d1;
   if (!db) return { rows: [], total: 0 };
   try {
     await ensureSchema(db);
-    const r = await db.prepare("SELECT comment_id, parent_id, author, author_id, avatar, text, likes, ctime FROM comments WHERE platform = ? AND video_id = ? ORDER BY likes DESC, ctime DESC LIMIT ? OFFSET ?").bind(platform, videoId, limit, offset).all();
-    const cnt = await db.prepare("SELECT COUNT(*) AS n FROM comments WHERE platform = ? AND video_id = ?").bind(platform, videoId).all();
-    return { rows: r?.results || [], total: cnt?.results?.[0]?.n || 0 };
+    const top = await db.prepare(`SELECT ${CMT_COLS} FROM comments WHERE platform = ? AND video_id = ? AND (parent_id IS NULL OR parent_id = '') ORDER BY likes DESC, ctime DESC LIMIT ? OFFSET ?`).bind(platform, videoId, limit, offset).all();
+    const parents = top?.results || [];
+    const cnt = await db.prepare("SELECT COUNT(*) AS n FROM comments WHERE platform = ? AND video_id = ? AND (parent_id IS NULL OR parent_id = '')").bind(platform, videoId).all();
+    if (parents.length) {
+      const ph = parents.map(() => "?").join(",");
+      const kids = await db.prepare(`SELECT ${CMT_COLS} FROM comments WHERE platform = ? AND video_id = ? AND parent_id IN (${ph}) ORDER BY likes DESC, ctime ASC`).bind(platform, videoId, ...parents.map((p) => p.comment_id)).all();
+      const byParent = {};
+      for (const k of kids?.results || []) (byParent[k.parent_id] ||= []).push(k);
+      for (const p of parents) p.replies = byParent[p.comment_id] || [];
+    }
+    return { rows: parents, total: cnt?.results?.[0]?.n || 0 };
   } catch (e) {
     try {
       console.error("[d1] getComments failed", e?.message || e);
@@ -1633,18 +1642,17 @@ async function ingestWork(ctx, request, platform, id, target, refresh = false, o
 
 // src/utils/comments.js
 var TTL = 6 * 3600 * 1e3;
-function normalize(resp) {
-  const list = resp?.data?.replies || [];
-  return list.map((c) => ({
+function mapBili(c, parentId) {
+  return {
     comment_id: c.rpid != null ? String(c.rpid) : null,
-    parent_id: null,
+    parent_id: parentId || null,
     text: c.content?.message || "",
     author: c.member?.uname || null,
     author_id: c.member?.mid != null ? String(c.member.mid) : null,
     avatar: c.member?.avatar || null,
     likes: c.like ?? 0,
     ctime: c.ctime ?? null
-  })).filter((c) => c.comment_id);
+  };
 }
 async function fetchAndStoreComments(ctx, platform, id, { count = 50 } = {}) {
   try {
@@ -1652,7 +1660,10 @@ async function fetchAndStoreComments(ctx, platform, id, { count = 50 } = {}) {
     const oid = data?.aid;
     if (!oid) return 0;
     const resp = await fetchVideoComments(ctx, String(oid), 1);
-    return await storeComments(ctx, platform, id, normalize(resp));
+    const list = resp?.data?.replies || [];
+    const out = list.map((c) => mapBili(c, null));
+    for (const c of list) for (const rc of c.replies || []) out.push(mapBili(rc, String(c.rpid)));
+    return await storeComments(ctx, platform, id, out.filter((c) => c.comment_id));
   } catch (e) {
     try {
       console.error("[comments] fetch failed", e?.message || e);
@@ -2228,6 +2239,8 @@ svg{width:100%;height:220px;display:block}
 .cmt .ca{font-family:var(--mono);font-size:12px;color:var(--teal)}
 .cmt .ct{font-size:14px;margin:2px 0;word-break:break-word}
 .cmt .cm{font-family:var(--mono);font-size:11px;color:var(--faint)}
+.creps{margin:8px 0 2px;padding-left:12px;border-left:2px solid var(--line);display:flex;flex-direction:column;gap:10px}
+.creps .cmt img{width:26px;height:26px;flex:0 0 26px}
 </style>
 </head>
 <body>
@@ -2341,15 +2354,17 @@ svg{width:100%;height:220px;display:block}
       var j=await r.json();var rows=j.data||[]
       box.innerHTML=''
       if(!rows.length){box.appendChild(el('div','hint','\u6682\u65E0\u8BC4\u8BBA\uFF08\u6216\u6B63\u5728\u6293\u53D6\uFF0C\u7A0D\u540E\u5237\u65B0\uFF09'));return}
-      rows.forEach(function(c){
+      function cmt(c){
         var it=el('div','cmt')
         if(c.avatar){var im=el('img');im.referrerPolicy='no-referrer';im.src=c.avatar;im.loading='lazy';it.appendChild(im)}
         var b=el('div','cb')
         b.appendChild(el('div','ca',c.author||'\u533F\u540D'))
         b.appendChild(el('div','ct',c.text||''))
         b.appendChild(el('div','cm','\u8D5E '+fmt(c.likes)+(c.ctime?(' \xB7 '+datestr(c.ctime)):'')))
-        it.appendChild(b);box.appendChild(it)
-      })
+        if(c.replies&&c.replies.length){var rep=el('div','creps');c.replies.forEach(function(s){rep.appendChild(cmt(s))});b.appendChild(rep)}
+        it.appendChild(b);return it
+      }
+      rows.forEach(function(c){box.appendChild(cmt(c))})
     }catch(e){box.innerHTML='<div class=hint>\u8BC4\u8BBA\u52A0\u8F7D\u5931\u8D25\uFF1A'+e.message+'</div>'}
   }
   load()
@@ -2375,7 +2390,8 @@ async function commentsApiService(request, ctx) {
       ({ rows, total } = await getComments(ctx, platform, id, limit, 0));
     }
   }
-  const data = rows.map((r) => ({ ...r, avatar: r.avatar ? imgProxyLink(request, ctx, r.avatar) : null }));
+  const rw = (r) => ({ ...r, avatar: r.avatar ? imgProxyLink(request, ctx, r.avatar) : null, replies: (r.replies || []).map(rw) });
+  const data = rows.map(rw);
   return rawJsonResponse({ code: 200, platform, id, page, limit, total, count: data.length, data });
 }
 
@@ -2666,7 +2682,7 @@ h2{font-size:15px;margin:30px 0 12px;font-family:var(--serif);letter-spacing:.04
 
 // src/service/cron.js
 var THROTTLE_MS = 50 * 1e3;
-var HOT_BATCH = 12;
+var HOT_BATCH = 30;
 async function cronService(request, ctx) {
   const expr = request.headers.get("x-edge-cron-expression") || "default";
   const last = await metaGet(ctx, `cron:last:${expr}`);
@@ -2680,17 +2696,20 @@ async function cronService(request, ctx) {
     let grown = 0;
     const errors = [];
     try {
-      const pop = await fetchComPopular(ctx, 1);
-      const list = pop?.data?.list || [];
-      for (const v of list) {
-        if (grown >= HOT_BATCH) break;
-        const bvid = v.bvid;
-        if (!bvid) continue;
-        try {
-          await ingestWork(ctx, request, "bilibili", bvid, `https://www.bilibili.com/video/${bvid}`, false);
-          grown++;
-        } catch (e) {
-          errors.push(`${bvid} ${e?.message || e}`);
+      for (let pn = 1; pn <= 5 && grown < HOT_BATCH; pn++) {
+        const pop = await fetchComPopular(ctx, pn);
+        const list = pop?.data?.list || [];
+        if (!list.length) break;
+        for (const v of list) {
+          if (grown >= HOT_BATCH) break;
+          const bvid = v.bvid;
+          if (!bvid) continue;
+          try {
+            await ingestWork(ctx, request, "bilibili", bvid, `https://www.bilibili.com/video/${bvid}`, false);
+            grown++;
+          } catch (e) {
+            errors.push(`${bvid} ${e?.message || e}`);
+          }
         }
       }
     } catch (e) {

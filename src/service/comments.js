@@ -25,8 +25,8 @@ export async function commentsApiService (request, ctx) {
       ;({ rows, total } = await getComments(ctx, platform, id, limit, 0))
     }
   }
-  // Route avatars through the cached /img proxy (R2) so every resource the
-  // UI renders is served from our cache, not the source CDN.
-  const data = rows.map(r => ({ ...r, avatar: r.avatar ? imgProxyLink(request, ctx, r.avatar) : null }))
+  // Route avatars (parents + nested replies) through the cached /img proxy.
+  const rw = (r) => ({ ...r, avatar: r.avatar ? imgProxyLink(request, ctx, r.avatar) : null, replies: (r.replies || []).map(rw) })
+  const data = rows.map(rw)
   return rawJsonResponse({ code: 200, platform, id, page, limit, total, count: data.length, data })
 }

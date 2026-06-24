@@ -13,7 +13,7 @@ import { ingestWork } from '../utils/ingest.js'
 import * as bili from '../bilibili/crawler.js'
 
 const THROTTLE_MS = 50 * 1000
-const HOT_BATCH = 12
+const HOT_BATCH = 30
 
 export async function cronService (request, ctx) {
   const expr = request.headers.get('x-edge-cron-expression') || 'default'
@@ -29,17 +29,21 @@ export async function cronService (request, ctx) {
     let grown = 0
     const errors = []
     try {
-      const pop = await bili.fetchComPopular(ctx, 1)
-      const list = pop?.data?.list || []
-      for (const v of list) {
-        if (grown >= HOT_BATCH) break
-        const bvid = v.bvid
-        if (!bvid) continue
-        try {
-          // warmVideo defaults true → parse + download media into R2.
-          await ingestWork(ctx, request, 'bilibili', bvid, `https://www.bilibili.com/video/${bvid}`, false)
-          grown++
-        } catch (e) { errors.push(`${bvid} ${e?.message || e}`) }
+      // popular returns ~20/page — walk pages until we reach HOT_BATCH.
+      for (let pn = 1; pn <= 5 && grown < HOT_BATCH; pn++) {
+        const pop = await bili.fetchComPopular(ctx, pn)
+        const list = pop?.data?.list || []
+        if (!list.length) break
+        for (const v of list) {
+          if (grown >= HOT_BATCH) break
+          const bvid = v.bvid
+          if (!bvid) continue
+          try {
+            // warmVideo defaults true → parse + download media into R2.
+            await ingestWork(ctx, request, 'bilibili', bvid, `https://www.bilibili.com/video/${bvid}`, false)
+            grown++
+          } catch (e) { errors.push(`${bvid} ${e?.message || e}`) }
+        }
       }
     } catch (e) { errors.push(`popular ${e?.message || e}`) }
     await metaSet(ctx, `cron:hot:${expr}`, now)

@@ -73,6 +73,8 @@ svg{width:100%;height:220px;display:block}
 .cmt .ca{font-family:var(--mono);font-size:12px;color:var(--teal)}
 .cmt .ct{font-size:14px;margin:2px 0;word-break:break-word}
 .cmt .cm{font-family:var(--mono);font-size:11px;color:var(--faint)}
+.creps{margin:8px 0 2px;padding-left:12px;border-left:2px solid var(--line);display:flex;flex-direction:column;gap:10px}
+.creps .cmt img{width:26px;height:26px;flex:0 0 26px}
 </style>
 </head>
 <body>
@@ -186,15 +188,17 @@ svg{width:100%;height:220px;display:block}
       var j=await r.json();var rows=j.data||[]
       box.innerHTML=''
       if(!rows.length){box.appendChild(el('div','hint','暂无评论（或正在抓取，稍后刷新）'));return}
-      rows.forEach(function(c){
+      function cmt(c){
         var it=el('div','cmt')
         if(c.avatar){var im=el('img');im.referrerPolicy='no-referrer';im.src=c.avatar;im.loading='lazy';it.appendChild(im)}
         var b=el('div','cb')
         b.appendChild(el('div','ca',c.author||'匿名'))
         b.appendChild(el('div','ct',c.text||''))
         b.appendChild(el('div','cm','赞 '+fmt(c.likes)+(c.ctime?(' · '+datestr(c.ctime)):'')))
-        it.appendChild(b);box.appendChild(it)
-      })
+        if(c.replies&&c.replies.length){var rep=el('div','creps');c.replies.forEach(function(s){rep.appendChild(cmt(s))});b.appendChild(rep)}
+        it.appendChild(b);return it
+      }
+      rows.forEach(function(c){box.appendChild(cmt(c))})
     }catch(e){box.innerHTML='<div class=hint>评论加载失败：'+e.message+'</div>'}
   }
   load()

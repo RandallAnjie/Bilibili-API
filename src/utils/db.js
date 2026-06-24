@@ -245,14 +245,27 @@ export async function storeComments (ctx, platform, videoId, comments) {
   }
 }
 
+const CMT_COLS = 'comment_id, parent_id, author, author_id, avatar, text, likes, ctime'
+
+// Top-level comments (paginated by likes) with their replies nested under
+// `.replies`. total = number of top-level comments.
 export async function getComments (ctx, platform, videoId, limit = 20, offset = 0) {
   const db = ctx.config.d1
   if (!db) return { rows: [], total: 0 }
   try {
     await ensureSchema(db)
-    const r = await db.prepare('SELECT comment_id, parent_id, author, author_id, avatar, text, likes, ctime FROM comments WHERE platform = ? AND video_id = ? ORDER BY likes DESC, ctime DESC LIMIT ? OFFSET ?').bind(platform, videoId, limit, offset).all()
-    const cnt = await db.prepare('SELECT COUNT(*) AS n FROM comments WHERE platform = ? AND video_id = ?').bind(platform, videoId).all()
-    return { rows: r?.results || [], total: cnt?.results?.[0]?.n || 0 }
+    const top = await db.prepare(`SELECT ${CMT_COLS} FROM comments WHERE platform = ? AND video_id = ? AND (parent_id IS NULL OR parent_id = '') ORDER BY likes DESC, ctime DESC LIMIT ? OFFSET ?`).bind(platform, videoId, limit, offset).all()
+    const parents = top?.results || []
+    const cnt = await db.prepare("SELECT COUNT(*) AS n FROM comments WHERE platform = ? AND video_id = ? AND (parent_id IS NULL OR parent_id = '')").bind(platform, videoId).all()
+    if (parents.length) {
+      const ph = parents.map(() => '?').join(',')
+      const kids = await db.prepare(`SELECT ${CMT_COLS} FROM comments WHERE platform = ? AND video_id = ? AND parent_id IN (${ph}) ORDER BY likes DESC, ctime ASC`)
+        .bind(platform, videoId, ...parents.map(p => p.comment_id)).all()
+      const byParent = {}
+      for (const k of (kids?.results || [])) (byParent[k.parent_id] ||= []).push(k)
+      for (const p of parents) p.replies = byParent[p.comment_id] || []
+    }
+    return { rows: parents, total: cnt?.results?.[0]?.n || 0 }
   } catch (e) {
     try { console.error('[d1] getComments failed', e?.message || e) } catch {}
     return { rows: [], total: 0 }
