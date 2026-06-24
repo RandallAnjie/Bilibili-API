@@ -2898,10 +2898,15 @@ h2{font-size:15px;margin:30px 0 12px;font-family:var(--serif);letter-spacing:.04
 var THROTTLE_MS = 50 * 1e3;
 var HOT_BATCH = 30;
 async function cronService(request, ctx) {
+  const url = new URL(request.url);
+  const sync = url.searchParams.get("token") === ctx.config.auth.token;
+  const only = url.searchParams.get("only") || "";
+  const doGrow = only !== "hot";
+  const doHot = only !== "grow";
   const expr = request.headers.get("x-edge-cron-expression") || "default";
   const last = await metaGet(ctx, `cron:last:${expr}`);
   const now = Date.now();
-  if (last && now - last.ts < THROTTLE_MS) {
+  if (last && now - last.ts < THROTTLE_MS && !sync) {
     return json({ code: 200, skipped: "throttled", expr });
   }
   await metaSet(ctx, `cron:last:${expr}`, now);
@@ -2909,7 +2914,7 @@ async function cronService(request, ctx) {
   const run = (async () => {
     let grown = 0;
     const errors = [];
-    try {
+    if (doGrow) try {
       for (let pn = 1; pn <= 5 && grown < HOT_BATCH; pn++) {
         const pop = await fetchComPopular(ctx, pn);
         const list = pop?.data?.list || [];
@@ -2930,7 +2935,7 @@ async function cronService(request, ctx) {
       errors.push(`popular ${e?.message || e}`);
     }
     let hotCats = 0;
-    try {
+    if (doHot) try {
       hotCats = await refreshHotBoards(ctx);
     } catch (e) {
       errors.push(`hot-board ${e?.message || e}`);
@@ -2938,11 +2943,11 @@ async function cronService(request, ctx) {
     await metaSet(ctx, `cron:hot:${expr}`, now);
     return { grown, hotCats, errors: errors.slice(0, 5) };
   })();
-  if (ctx.waitUntil) {
+  if (ctx.waitUntil && !sync) {
     ctx.waitUntil(run);
     return json({ code: 200, expr, started: true, hotBatch: HOT_BATCH });
   }
-  return json({ code: 200, expr, ...await run });
+  return json({ code: 200, expr, sync: sync || void 0, only: only || void 0, ...await run });
 }
 function json(obj) {
   return new Response(JSON.stringify(obj), { status: 200, headers: { "content-type": "application/json; charset=utf-8" } });
@@ -3220,6 +3225,12 @@ async function router(request, ctx) {
     return new Response(null, { status: 204 });
   }
   if (pathname === "/__edge_cron" && request.method === "POST") {
+    return cronService(request, ctx);
+  }
+  if (pathname === "/api/admin/cron") {
+    if (url.searchParams.get("token") !== ctx.config.auth.token) {
+      return new Response(JSON.stringify({ code: 401, message: "token required" }), { status: 401, headers: { "content-type": "application/json; charset=utf-8" } });
+    }
     return cronService(request, ctx);
   }
   if (pathname === "/" && request.method === "GET") {

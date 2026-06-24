@@ -96,6 +96,10 @@ points + comments) AND grow the library by ingesting up to 4 fresh videos
 from the popular feed (`x/web-interface/popular`) AND refresh the public
 排行榜 (`refreshHotBoards` — all `/hot` categories into D1).
 
+Admins can trigger a run by hand for testing: `GET /api/admin/cron?token=`
+(master token) runs synchronously, bypasses the throttle, and returns the
+result. `?only=hot` refreshes just the 排行榜, `?only=grow` just growth.
+
 ### 排行榜 (`/hot` + `/api/bilibili/hot?rid=`)
 
 Per-region ranking (`x/web-interface/ranking/v2`, no wbi), ~100 real

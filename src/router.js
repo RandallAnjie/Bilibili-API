@@ -40,6 +40,14 @@ export async function router (request, ctx) {
   if (pathname === '/__edge_cron' && request.method === 'POST') {
     return cronService(request, ctx)
   }
+  // Admin manual trigger (master token) — run the cron synchronously for
+  // testing 排行榜 refresh + media caching. ?only=hot|grow narrows it.
+  if (pathname === '/api/admin/cron') {
+    if (url.searchParams.get('token') !== ctx.config.auth.token) {
+      return new Response(JSON.stringify({ code: 401, message: 'token required' }), { status: 401, headers: { 'content-type': 'application/json; charset=utf-8' } })
+    }
+    return cronService(request, ctx)
+  }
   if (pathname === '/' && request.method === 'GET') {
     return appService(request, ctx)
   }
