@@ -69,6 +69,13 @@ export function fetchComPopular (ctx, pn = 1) {
   return fetchGetJson(`${EP.COM_POPULAR}?${q}`, biliHeaders(ctx))
 }
 
+// 排行榜 — the per-region ranking (rid=0 全站). Returns ~100 real videos
+// with bvid/title/owner/stat/pic. No wbi needed.
+export function fetchRanking (ctx, rid = 0) {
+  const params = new URLSearchParams({ rid: String(rid), type: 'all' })
+  return fetchGetJson(`${EP.RANKING}?${params.toString()}`, biliHeaders(ctx))
+}
+
 export function fetchVideoComments (ctx, aid, pn = 1) {
   return fetchGetJson(`${EP.VIDEO_COMMENTS}?type=1&oid=${encodeURIComponent(aid)}&pn=${pn}&sort=2`, biliHeaders(ctx))
 }

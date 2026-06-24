@@ -505,6 +505,8 @@ var BiliEndpoints = {
   // ?vmid=  (follower/following count)
   COM_POPULAR: `${API}/x/web-interface/popular`,
   // wbi
+  RANKING: `${API}/x/web-interface/ranking/v2`,
+  // ?rid=&type=all  (no wbi)
   VIDEO_COMMENTS: `${API}/x/v2/reply`,
   COMMENT_REPLY: `${API}/x/v2/reply/reply`,
   USER_DYNAMIC: `${API}/x/polymer/web-dynamic/v1/feed/space`,
@@ -567,6 +569,10 @@ function fetchUserPostVideos(ctx, mid, pn = 1) {
 function fetchComPopular(ctx, pn = 1) {
   const q2 = wbiQuery({ ps: "20", pn: String(pn), web_location: "333.934" });
   return fetchGetJson(`${BiliEndpoints.COM_POPULAR}?${q2}`, biliHeaders(ctx));
+}
+function fetchRanking(ctx, rid = 0) {
+  const params = new URLSearchParams({ rid: String(rid), type: "all" });
+  return fetchGetJson(`${BiliEndpoints.RANKING}?${params.toString()}`, biliHeaders(ctx));
 }
 function fetchVideoComments(ctx, aid, pn = 1) {
   return fetchGetJson(`${BiliEndpoints.VIDEO_COMMENTS}?type=1&oid=${encodeURIComponent(aid)}&pn=${pn}&sort=2`, biliHeaders(ctx));
@@ -2079,6 +2085,7 @@ footer a{color:var(--muted)}
     <button class="tab on" data-sort=recent id=tabRecent>\u6700\u8FD1</button>
     <button class=tab data-sort=hot id=tabHot>\u70ED\u5EA6</button>
     <span class=spacer></span>
+    <a href="/hot">\u6392\u884C\u699C</a>
     <a href="/search">\u641C\u7D22</a>
     <a href="/">\u2190 \u53BB\u89E3\u6790</a>
   </div>
@@ -2172,6 +2179,213 @@ footer a{color:var(--muted)}
 </body>
 </html>`;
 
+// src/service/hot.js
+var CATS = [
+  { rid: 0, name: "\u5168\u7AD9" },
+  { rid: 1, name: "\u52A8\u753B" },
+  { rid: 3, name: "\u97F3\u4E50" },
+  { rid: 4, name: "\u6E38\u620F" },
+  { rid: 188, name: "\u79D1\u6280" },
+  { rid: 119, name: "\u9B3C\u755C" },
+  { rid: 129, name: "\u821E\u8E48" },
+  { rid: 160, name: "\u751F\u6D3B" },
+  { rid: 181, name: "\u5F71\u89C6" },
+  { rid: 168, name: "\u56FD\u521B" }
+];
+var RIDS = new Set(CATS.map((c) => c.rid));
+var keyFor = (rid) => `hot:bili:rank:${rid}`;
+async function buildRanking(ctx, rid) {
+  const resp = await fetchRanking(ctx, rid);
+  const list = resp?.data?.list || [];
+  return list.map((v, i) => ({
+    rank: i + 1,
+    bvid: v.bvid || "",
+    title: v.title || "",
+    up: v.owner?.name || "",
+    view: v.stat?.view || 0,
+    duration: v.duration || 0,
+    cover: v.pic || null
+  })).filter((x) => x.bvid);
+}
+async function refreshHotBoards(ctx) {
+  let ok = 0;
+  for (const c of CATS) {
+    try {
+      const videos = await buildRanking(ctx, c.rid);
+      if (videos.length) {
+        await metaSet(ctx, keyFor(c.rid), JSON.stringify(videos));
+        ok++;
+      }
+    } catch {
+    }
+  }
+  return ok;
+}
+async function hotApiService(request, ctx) {
+  const url = new URL(request.url);
+  let rid = Number(url.searchParams.get("rid"));
+  if (!RIDS.has(rid)) rid = 0;
+  const isAdmin = url.searchParams.get("token") === ctx.config.auth.token;
+  let videos, updated;
+  const cached = await metaGet(ctx, keyFor(rid));
+  if (cached) {
+    try {
+      videos = JSON.parse(cached.v);
+      updated = cached.ts;
+    } catch {
+    }
+  }
+  if (!videos && isAdmin) {
+    videos = await buildRanking(ctx, rid);
+    updated = Date.now();
+    if (videos.length) await metaSet(ctx, keyFor(rid), JSON.stringify(videos));
+  }
+  if (!videos) {
+    return rawJsonResponse({ code: 200, rid, pending: true, updated: 0, cats: CATS, videos: [] });
+  }
+  const rw = (x) => ({ ...x, cover: x.cover ? imgProxyLink(request, ctx, x.cover) : null });
+  return rawJsonResponse({ code: 200, rid, updated, cats: CATS, videos: videos.map(rw) });
+}
+async function hotPageService(request, ctx) {
+  return new Response(PAGE2, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+}
+var PAGE2 = `<!doctype html>
+<html lang=zh>
+<head>
+<meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>\u6392\u884C\u699C \xB7 \u54D4\u54E9\u54D4\u54E9\u89E3\u6790</title>
+<style>
+:root{
+  --bg:#10141c;--panel:#181d28;--panel2:#1d2330;--line:#2b3342;
+  --ink:#e7edf5;--muted:#8b97a8;--faint:#5a6473;--pink:#fb7299;--blue:#23ade5;--gold:#f5c451;
+  --serif:"Songti SC","STSong","Noto Serif SC",ui-serif,Georgia,serif;
+  --sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",Segoe UI,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(1200px 600px at 50% -10%,#1a2230 0%,transparent 60%),var(--bg);color:var(--ink);font-family:var(--sans);padding:max(20px,4vh) 18px 60px;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1000px;margin:0 auto}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.32em;text-transform:uppercase;color:var(--pink);margin:0 0 8px}
+h1{font-family:var(--serif);font-weight:600;font-size:clamp(36px,9vw,64px);line-height:.95;margin:0;letter-spacing:.04em}
+.sub{color:var(--muted);font-size:14px;margin:12px 0 0}
+.cats{display:flex;gap:8px;align-items:center;margin:22px 0 8px;flex-wrap:wrap}
+.cat{font-family:var(--mono);font-size:12px;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--muted);padding:7px 14px;border-radius:999px}
+.cat.on{border-color:var(--pink);color:var(--pink)}
+.nav{display:flex;gap:14px;margin:0 0 16px}
+.nav a{font-family:var(--mono);font-size:11px;color:var(--faint);text-decoration:none}
+.nav a:hover{color:var(--blue)}
+.status{font-family:var(--mono);font-size:12px;color:var(--muted);margin:0 2px 16px;min-height:1.3em}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:14px}
+.card{cursor:pointer;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;transition:border-color .15s}
+.card:hover{border-color:var(--blue)}
+.thumb{position:relative;width:100%;aspect-ratio:16/10;background:#0b0e14;overflow:hidden}
+.thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.thumb .rk{position:absolute;left:8px;top:8px;font-family:var(--serif);font-weight:700;font-size:15px;min-width:24px;text-align:center;background:rgba(11,14,20,.78);color:var(--ink);padding:1px 6px;border-radius:6px}
+.card:nth-child(-n+3) .thumb .rk{background:var(--pink);color:#1a0c0f}
+.thumb .dur{position:absolute;right:8px;bottom:8px;font-family:var(--mono);font-size:10px;background:rgba(11,14,20,.8);color:#cfd8e3;padding:1px 6px;border-radius:5px}
+.thumb .play{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:34px;color:rgba(255,255,255,.85);opacity:0;transition:opacity .15s}
+.card:hover .play{opacity:1}
+.cinfo{padding:9px 11px}
+.cinfo .cd{font-size:13px;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.cinfo .meta{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+footer{margin-top:32px;font-family:var(--mono);font-size:11px;color:var(--faint)}
+footer a{color:var(--muted)}
+.lb{position:fixed;inset:0;z-index:50;display:none;align-items:center;justify-content:center;background:rgba(6,8,12,.92);backdrop-filter:blur(6px)}
+.lb.on{display:flex}
+.lb-stage{position:relative;max-width:min(1000px,94vw);max-height:90vh;display:flex;align-items:center;justify-content:center}
+.lb-stage video,.lb-stage img{max-width:94vw;max-height:90vh;border-radius:10px;display:block;background:#000}
+.lb-msg{font-family:var(--mono);font-size:13px;color:#cdd6e2}
+.lb-close{position:fixed;top:16px;right:18px;width:40px;height:40px;border:0;border-radius:50%;background:rgba(255,255,255,.1);color:#fff;font-size:20px;cursor:pointer;line-height:40px}
+.lb-close:hover{background:var(--pink);color:#1a0c0f}
+.lb-cap{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);max-width:90vw;font-family:var(--mono);font-size:12px;color:#cdd6e2;background:rgba(6,8,12,.6);padding:6px 14px;border-radius:999px;text-align:center}
+.lb-cap a{color:var(--blue);text-decoration:none}
+</style>
+</head>
+<body>
+<main class=wrap>
+  <p class=eyebrow>BILIBILI \u6392\u884C\u699C</p>
+  <h1>\u6B63\u5728\u88AB\u5237</h1>
+  <p class=sub>B \u7AD9\u5404\u5206\u533A\u6B64\u523B\u7684\u6392\u884C\u699C\u3002\u70B9\u5F00\u4EFB\u610F\u4E00\u652F\uFF0C\u81EA\u52A8\u89E3\u6790\u5165\u5E93\u2014\u2014\u4E4B\u540E\u5C31\u4ECE\u6211\u4EEC\u81EA\u5DF1\u7684\u5E93\u91CC\u770B\u3002</p>
+  <div id=cats class=cats></div>
+  <div class=nav><a href="/discover">\u53D1\u73B0</a><a href="/search">\u641C\u7D22</a><a href="/">\u2190 \u53BB\u89E3\u6790</a></div>
+  <p id=status class=status>\u52A0\u8F7D\u4E2D\u2026</p>
+  <div id=grid class=grid></div>
+  <footer>\u81EA\u6258\u7BA1\u4E8E RandallFlare \xB7 <span id=upd></span> \xB7 <a href="/">\u89E3\u6790\u53F0</a></footer>
+</main>
+<div id=lb class=lb>
+  <button class=lb-close id=lbClose aria-label=\u5173\u95ED>\xD7</button>
+  <div class=lb-stage id=lbStage></div>
+  <div class=lb-cap id=lbCap></div>
+</div>
+<script>
+(function(){
+  var $=function(s){return document.querySelector(s)}
+  var grid=$('#grid'),statusEl=$('#status'),catsEl=$('#cats'),rid=0,cats=null
+  function el(t,c,x){var e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e}
+  function fmt(n){n=Number(n)||0;if(n>=1e8)return (n/1e8).toFixed(1)+'\u4EBF';if(n>=1e4)return (n/1e4).toFixed(1)+'\u4E07';return String(n)}
+  function dur(d){d=Number(d)||0;var m=Math.floor(d/60),s=d%60;return m+':'+(s<10?'0':'')+s}
+  function card(r){
+    var c=el('div','card');c.addEventListener('click',function(){openVideo(r)})
+    var th=el('div','thumb')
+    if(r.cover){var im=el('img');im.loading='lazy';im.src=r.cover;im.alt='';th.appendChild(im)}
+    th.appendChild(el('span','rk',r.rank))
+    if(r.duration)th.appendChild(el('span','dur',dur(r.duration)))
+    th.appendChild(el('span','play','\u25B6'))
+    c.appendChild(th)
+    var info=el('div','cinfo')
+    info.appendChild(el('div','cd',r.title||'(\u65E0\u6807\u9898)'))
+    info.appendChild(el('div','meta',(r.up||'\u672A\u77E5 UP')+' \xB7 '+fmt(r.view)+' \u64AD\u653E'))
+    c.appendChild(info)
+    return c
+  }
+  function renderCats(){
+    catsEl.innerHTML=''
+    cats.forEach(function(c){
+      var b=el('button','cat'+(c.rid===rid?' on':''),c.name)
+      b.addEventListener('click',function(){if(rid===c.rid)return;rid=c.rid;renderCats();load()})
+      catsEl.appendChild(b)
+    })
+  }
+  async function load(){
+    statusEl.textContent='\u52A0\u8F7D\u4E2D\u2026';grid.innerHTML=''
+    try{
+      var j=await (await fetch('/api/bilibili/hot?rid='+rid)).json()
+      if(!cats){cats=j.cats||[];renderCats()}
+      var rows=j.videos||[]
+      if(j.updated){var d=new Date(j.updated);$('#upd').textContent='\u66F4\u65B0\u4E8E '+d.getHours()+':'+('0'+d.getMinutes()).slice(-2)}
+      statusEl.textContent=rows.length?('\u5171 '+rows.length+' \u652F \xB7 \u70B9\u5F00\u5373\u81EA\u52A8\u89E3\u6790\u5165\u5E93'):(j.pending?'\u699C\u5355\u968F\u5B9A\u65F6\u4EFB\u52A1\u5237\u65B0\uFF0C\u9996\u6B21\u751F\u6210\u4E2D\uFF0C\u7A0D\u540E\u518D\u6765':'\u6682\u65F6\u62C9\u4E0D\u5230\u8FD9\u4E2A\u699C\u5355\uFF0C\u5F85\u4F1A\u513F\u518D\u6765')
+      rows.forEach(function(r){grid.appendChild(card(r))})
+    }catch(e){statusEl.textContent='\u52A0\u8F7D\u5931\u8D25\uFF1A'+e.message}
+  }
+  // Lightbox \u2014 clicking a video triggers a guest parse (stores to D1 + warms
+  // media into R2), then plays the combined mp4.
+  var lb=$('#lb'),lbStage=$('#lbStage'),lbCap=$('#lbCap')
+  function closeLb(){lb.classList.remove('on');lbStage.innerHTML='';lbCap.innerHTML='';document.body.style.overflow=''}
+  $('#lbClose').addEventListener('click',closeLb)
+  lb.addEventListener('click',function(e){if(e.target===lb)closeLb()})
+  document.addEventListener('keydown',function(e){if(e.key==='Escape'&&lb.classList.contains('on'))closeLb()})
+  async function openVideo(r){
+    lb.classList.add('on');document.body.style.overflow='hidden'
+    lbStage.innerHTML='<div class=lb-msg>\u89E3\u6790\u5E76\u5165\u5E93\u4E2D\u2026</div>';lbCap.innerHTML=''
+    try{
+      var u='https://www.bilibili.com/video/'+encodeURIComponent(r.bvid)
+      var j=await (await fetch('/api/hybrid/video_data?url='+encodeURIComponent(u)+'&minimal=1&proxy=1')).json()
+      var o=j.data||{};var vd=o.video_data||{}
+      var src=vd.mp4_url||vd.video_url||o.play
+      var work='/work?platform=bilibili&id='+encodeURIComponent(r.bvid)
+      lbStage.innerHTML=''
+      if(src){var v=document.createElement('video');v.controls=true;v.autoplay=true;v.setAttribute('playsinline','');v.src=src;lbStage.appendChild(v)}
+      else{var c=o.cover_data&&o.cover_data.cover;if(c){var ci=document.createElement('img');ci.src=c;lbStage.appendChild(ci)}else lbStage.innerHTML='<div class=lb-msg>\u5DF2\u5165\u5E93\uFF0C\u4F46\u6682\u65F6\u62FF\u4E0D\u5230\u53EF\u64AD\u653E\u5730\u5740</div>'}
+      lbCap.innerHTML='\u5DF2\u5165\u5E93 \xB7 <a href="'+work+'">\u67E5\u770B\u6570\u636E\u5206\u6790 \u2192</a>'
+    }catch(e){lbStage.innerHTML='<div class=lb-msg>\u89E3\u6790\u5931\u8D25\uFF1A'+(e.message||e)+'</div>'}
+  }
+  load()
+})();
+</script>
+</body>
+</html>`;
+
 // src/service/work.js
 async function workApiService(request, ctx) {
   const url = new URL(request.url);
@@ -2183,9 +2397,9 @@ async function workApiService(request, ctx) {
   return rawJsonResponse({ code: 200, ...data });
 }
 async function workPageService(request, ctx) {
-  return new Response(PAGE2, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+  return new Response(PAGE3, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
 }
-var PAGE2 = `<!doctype html>
+var PAGE3 = `<!doctype html>
 <html lang=zh>
 <head>
 <meta charset=utf-8>
@@ -2407,9 +2621,9 @@ async function searchApiService(request, ctx) {
   return rawJsonResponse({ code: 200, q: q2, page, limit, total, pages: Math.ceil(total / limit) || 1, count: rows.length, data: rows });
 }
 async function searchPageService(request, ctx) {
-  return new Response(PAGE3, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+  return new Response(PAGE4, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
 }
-var PAGE3 = `<!doctype html>
+var PAGE4 = `<!doctype html>
 <html lang=zh>
 <head>
 <meta charset=utf-8>
@@ -2539,9 +2753,9 @@ async function authorApiService(request, ctx) {
   return rawJsonResponse({ code: 200, page, limit, pages: Math.ceil(data.total / limit) || 1, ...data });
 }
 async function authorPageService(request, ctx) {
-  return new Response(PAGE4, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+  return new Response(PAGE5, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
 }
-var PAGE4 = `<!doctype html>
+var PAGE5 = `<!doctype html>
 <html lang=zh>
 <head>
 <meta charset=utf-8>
@@ -2715,8 +2929,14 @@ async function cronService(request, ctx) {
     } catch (e) {
       errors.push(`popular ${e?.message || e}`);
     }
+    let hotCats = 0;
+    try {
+      hotCats = await refreshHotBoards(ctx);
+    } catch (e) {
+      errors.push(`hot-board ${e?.message || e}`);
+    }
     await metaSet(ctx, `cron:hot:${expr}`, now);
-    return { grown, errors: errors.slice(0, 5) };
+    return { grown, hotCats, errors: errors.slice(0, 5) };
   })();
   if (ctx.waitUntil) {
     ctx.waitUntil(run);
@@ -2788,9 +3008,9 @@ async function imgService(request, ctx) {
 
 // src/service/app.js
 async function appService(request, ctx) {
-  return new Response(PAGE5, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+  return new Response(PAGE6, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
 }
-var PAGE5 = `<!doctype html>
+var PAGE6 = `<!doctype html>
 <html lang=zh>
 <head>
 <meta charset=utf-8>
@@ -3019,6 +3239,12 @@ async function router(request, ctx) {
   }
   if (pathname === "/api/discover" && request.method === "GET") {
     return discoverApiService(request, ctx);
+  }
+  if (pathname === "/hot" && request.method === "GET") {
+    return hotPageService(request, ctx);
+  }
+  if (pathname === "/api/bilibili/hot" && request.method === "GET") {
+    return hotApiService(request, ctx);
   }
   if (pathname === "/work" && request.method === "GET") {
     return workPageService(request, ctx);

@@ -86,6 +86,7 @@ footer a{color:var(--muted)}
     <button class="tab on" data-sort=recent id=tabRecent>最近</button>
     <button class=tab data-sort=hot id=tabHot>热度</button>
     <span class=spacer></span>
+    <a href="/hot">排行榜</a>
     <a href="/search">搜索</a>
     <a href="/">← 去解析</a>
   </div>

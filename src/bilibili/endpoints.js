@@ -11,6 +11,7 @@ export const BiliEndpoints = {
   USER_DETAIL: `${API}/x/space/wbi/acc/info`, // wbi
   RELATION_STAT: `${API}/x/relation/stat`, // ?vmid=  (follower/following count)
   COM_POPULAR: `${API}/x/web-interface/popular`, // wbi
+  RANKING: `${API}/x/web-interface/ranking/v2`, // ?rid=&type=all  (no wbi)
   VIDEO_COMMENTS: `${API}/x/v2/reply`,
   COMMENT_REPLY: `${API}/x/v2/reply/reply`,
   USER_DYNAMIC: `${API}/x/polymer/web-dynamic/v1/feed/space`, // wbi

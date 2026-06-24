@@ -93,7 +93,17 @@ Edge agent POSTs with `X-Edge-Cron-Expression`, no token (memory
 `project_bigrandall_cron_convention`). Throttled 50s/expr. Each run:
 refresh the 8 oldest works (new `stats_history` snapshots + follower
 points + comments) AND grow the library by ingesting up to 4 fresh videos
-from the popular feed (`x/web-interface/popular`).
+from the popular feed (`x/web-interface/popular`) AND refresh the public
+排行榜 (`refreshHotBoards` — all `/hot` categories into D1).
+
+### 排行榜 (`/hot` + `/api/bilibili/hot?rid=`)
+
+Per-region ranking (`x/web-interface/ranking/v2`, no wbi), ~100 real
+videos/category. **Upstream fetch is cron-only** (`refreshHotBoards`
+stores each category in `kv_meta`); the public API reads D1 only and
+returns `{pending:true}` on a cold miss (master `?token=` may warm it
+live). Clicking a card runs the normal guest parse (stores to D1 + warms
+R2) and plays the combined mp4 in a lightbox. Covers via the `/img` proxy.
 
 ## Conventions
 

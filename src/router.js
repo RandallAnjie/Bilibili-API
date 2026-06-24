@@ -13,6 +13,7 @@ import { hybridService, downloadService } from './service/hybrid.js'
 import { proxyService } from './service/proxy.js'
 import { adminPageService, adminRecentService } from './service/admin.js'
 import { discoverPageService, discoverApiService } from './service/discover.js'
+import { hotPageService, hotApiService } from './service/hot.js'
 import { workPageService, workApiService } from './service/work.js'
 import { commentsApiService } from './service/comments.js'
 import { searchPageService, searchApiService } from './service/search.js'
@@ -56,6 +57,12 @@ export async function router (request, ctx) {
   }
   if (pathname === '/api/discover' && request.method === 'GET') {
     return discoverApiService(request, ctx)
+  }
+  if (pathname === '/hot' && request.method === 'GET') {
+    return hotPageService(request, ctx)
+  }
+  if (pathname === '/api/bilibili/hot' && request.method === 'GET') {
+    return hotApiService(request, ctx)
   }
   if (pathname === '/work' && request.method === 'GET') {
     return workPageService(request, ctx)

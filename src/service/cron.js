@@ -10,6 +10,7 @@
 // public-video parse we'd serve anyway.
 import { metaGet, metaSet } from '../utils/db.js'
 import { ingestWork } from '../utils/ingest.js'
+import { refreshHotBoards } from './hot.js'
 import * as bili from '../bilibili/crawler.js'
 
 const THROTTLE_MS = 50 * 1000
@@ -46,8 +47,14 @@ export async function cronService (request, ctx) {
         }
       }
     } catch (e) { errors.push(`popular ${e?.message || e}`) }
+
+    // Refresh the public 排行榜 (all categories) into D1, so /api/bilibili/hot
+    // serves from cache without ever hitting upstream itself.
+    let hotCats = 0
+    try { hotCats = await refreshHotBoards(ctx) } catch (e) { errors.push(`hot-board ${e?.message || e}`) }
+
     await metaSet(ctx, `cron:hot:${expr}`, now)
-    return { grown, errors: errors.slice(0, 5) }
+    return { grown, hotCats, errors: errors.slice(0, 5) }
   })()
 
   if (ctx.waitUntil) {
